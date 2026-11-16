@@ -1,4 +1,4 @@
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -11,17 +11,35 @@ import {
 import { useAuthStore } from '../../store/auth.store';
 import { useFocusEffect } from 'expo-router';
 import { todoRepository, timeLogRepository } from '../../db/repository';
+import { calendarRepository, type DayTodoSignal } from '../../db/calendar.repository';
 import { PersonalTodo, PersonalTodoColor, Priority, PersonalTodoSubtask } from '../../types/todo.types';
 import { BrandColors, TodoColors } from '../../constants/theme';
 import { TodoCard } from '../../components/todo-card';
 import { CreateTodoModal, defaultTimeBlock } from '../../components/create-todo-modal';
-import { DatePickerSheet, formatLongDate, fromIsoDate, toIsoDate } from '../../components/date-picker-sheet';
+import { DatePickerSheet, fromIsoDate, toIsoDate } from '../../components/date-picker-sheet';
 import { PomodoroTimer } from '../../components/pomodoro-timer';
 import { NotificationService } from '../../services/notification.service';
 import { sessionToLoggedMinutes, type PomodoroSession } from '../../db/pomodoro';
 import { teamRepository } from '../../db/team.repository';
 import type { TodoSwipeAction } from '../../components/todo-swipe-gesture';
-import { Plus, Calendar, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react-native';
+import { Plus, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, CalendarDays } from 'lucide-react-native';
+
+const MONTH_NAMES = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
+const WEEKDAY_NAMES = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
 
 export default function ExecutiveTodosScreen() {
   const user = useAuthStore((s) => s.user);
@@ -29,12 +47,13 @@ export default function ExecutiveTodosScreen() {
   const todayIso = toIsoDate(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(todayIso);
   const [todos, setTodos] = useState<PersonalTodo[]>([]);
+  const [weekSignals, setWeekSignals] = useState<Record<string, DayTodoSignal>>({});
   const [yesterdayPendingCount, setYesterdayPendingCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'completed'>('all');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
-  const [isDatePickerOpen, setIsDatePickerOpen] = useState<boolean>(false);
   const [timerFor, setTimerFor] = useState<PersonalTodo | null>(null);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState<boolean>(false);
 
   const userId = user?.id ?? '';
 
@@ -43,6 +62,20 @@ export default function ExecutiveTodosScreen() {
     try {
       const data = await todoRepository.getByDate(userId, selectedDate);
       setTodos(data);
+
+      // Sinyal to-do untuk 7 hari minggu ini
+      const curr = fromIsoDate(selectedDate);
+      const dayOfWeek = (curr.getDay() + 6) % 7;
+      const monday = new Date(curr);
+      monday.setDate(curr.getDate() - dayOfWeek);
+      const sunday = new Date(monday);
+      sunday.setDate(monday.getDate() + 6);
+      const signals = await calendarRepository.getTodoSignals(
+        userId,
+        toIsoDate(monday),
+        toIsoDate(sunday)
+      );
+      setWeekSignals(signals);
 
       // Cek apakah ada tugas tertunda kemarin (rollover candidate)
       const yesterday = new Date();
@@ -56,7 +89,7 @@ export default function ExecutiveTodosScreen() {
     } finally {
       setIsLoading(false);
     }
-  }, [userId, selectedDate]);
+  }, [userId, selectedDate, setIsLoading, setTodos, setWeekSignals, setYesterdayPendingCount]);
 
   // Muat ulang setiap tab kembali fokus: CRUD dari halaman lain (jadwal, sheets) harus terlihat di sini.
   useFocusEffect(
@@ -208,11 +241,34 @@ export default function ExecutiveTodosScreen() {
     loadTodos();
   };
 
-  const shiftDate = (offsetDays: number) => {
-    const current = fromIsoDate(selectedDate);
-    current.setDate(current.getDate() + offsetDays);
-    setSelectedDate(toIsoDate(current));
+  const shiftWeek = (offset: number) => {
+    const next = fromIsoDate(selectedDate);
+    next.setDate(next.getDate() + offset * 7);
+    setSelectedDate(toIsoDate(next));
   };
+
+  const monthYearTitle = useMemo(() => {
+    const curr = fromIsoDate(selectedDate);
+    return `${MONTH_NAMES[curr.getMonth()]} ${curr.getFullYear()}`;
+  }, [selectedDate]);
+
+  const weekDays = useMemo(() => {
+    const curr = fromIsoDate(selectedDate);
+    const dayOfWeek = (curr.getDay() + 6) % 7;
+    const monday = new Date(curr);
+    monday.setDate(curr.getDate() - dayOfWeek);
+
+    return Array.from({ length: 7 }, (_, i) => {
+      const d = new Date(monday);
+      d.setDate(monday.getDate() + i);
+      const iso = toIsoDate(d);
+      return {
+        iso,
+        dayNum: d.getDate(),
+        dayName: WEEKDAY_NAMES[i],
+      };
+    });
+  }, [selectedDate]);
 
   // Filter list
   const filteredTodos = todos.filter((t) => {
@@ -227,29 +283,92 @@ export default function ExecutiveTodosScreen() {
 
   return (
     <View style={styles.container}>
-      {/* Date Navigation Bar */}
-      <View style={styles.dateBar}>
-        <TouchableOpacity style={styles.navArrow} onPress={() => shiftDate(-1)}>
-          <ChevronLeft size={20} color="#64748B" />
-        </TouchableOpacity>
+      {/* Strip Mingguan: Judul bulan di kiri, panah ganti mingguan di pojok kanan atas, 7 hari singkatan */}
+      <View style={styles.weekCard}>
+        <View style={styles.weekHeader}>
+          <TouchableOpacity
+            style={styles.monthButton}
+            onPress={() => setIsDatePickerOpen(true)}
+            accessibilityLabel={`${monthYearTitle}. Ketuk untuk ganti tanggal`}
+          >
+            <View style={styles.monthButtonContent}>
+              <CalendarDays size={15} color={TodoColors.accent} strokeWidth={2.2} />
+              <Text style={styles.monthButtonText}>{monthYearTitle}</Text>
+            </View>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.dateCenter}
-          onPress={() => setIsDatePickerOpen(true)}
-          accessibilityLabel="Pilih tanggal"
-        >
-          <Calendar size={15} color={TodoColors.accent} />
-          <View style={styles.dateCenterText}>
-            <Text style={styles.dateLabel}>{formatLongDate(selectedDate)}</Text>
-            <Text style={styles.dateHint}>
-              {selectedDate === todayIso ? 'Hari ini · ketuk untuk ganti' : 'Ketuk untuk ganti'}
-            </Text>
+          <View style={styles.weekNavArrows}>
+            <TouchableOpacity
+              style={styles.weekArrowBtn}
+              onPress={() => shiftWeek(-1)}
+              accessibilityLabel="Minggu sebelumnya"
+            >
+              <ChevronLeft size={16} color={TodoColors.muted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.weekArrowBtn}
+              onPress={() => shiftWeek(1)}
+              accessibilityLabel="Minggu berikutnya"
+            >
+              <ChevronRight size={16} color={TodoColors.muted} />
+            </TouchableOpacity>
           </View>
-        </TouchableOpacity>
+        </View>
 
-        <TouchableOpacity style={styles.navArrow} onPress={() => shiftDate(1)}>
-          <ChevronRight size={20} color="#64748B" />
-        </TouchableOpacity>
+        {/* 7 Hari Singkatan dari kiri ke kanan */}
+        <View style={styles.weekDaysRow}>
+          {weekDays.map((item) => {
+            const isSelected = item.iso === selectedDate;
+            const isToday = item.iso === todayIso;
+            const signal = weekSignals[item.iso];
+
+            return (
+              <TouchableOpacity
+                key={item.iso}
+                style={[
+                  styles.dayChip,
+                  isSelected && styles.dayChipSelected,
+                  isToday && !isSelected && styles.dayChipToday,
+                ]}
+                onPress={() => setSelectedDate(item.iso)}
+                activeOpacity={0.7}
+                accessibilityLabel={`${item.dayName}, ${item.dayNum} ${monthYearTitle}`}
+              >
+                <Text
+                  style={[
+                    styles.dayChipName,
+                    isSelected && styles.dayChipNameSelected,
+                    isToday && !isSelected && styles.dayChipNameToday,
+                  ]}
+                >
+                  {item.dayName}
+                </Text>
+                <Text
+                  style={[
+                    styles.dayChipNum,
+                    isSelected && styles.dayChipNumSelected,
+                    isToday && !isSelected && styles.dayChipNumToday,
+                  ]}
+                >
+                  {item.dayNum}
+                </Text>
+
+                <View
+                  style={[
+                    styles.dayChipDot,
+                    signal?.hasTodos
+                      ? isSelected
+                        ? styles.dayChipDotSelected
+                        : signal.pending > 0
+                        ? styles.dayChipDotActive
+                        : styles.dayChipDotCompleted
+                      : null,
+                  ]}
+                />
+              </TouchableOpacity>
+            );
+          })}
+        </View>
       </View>
 
       {/* Progress Roll-up Header Card */}
@@ -410,43 +529,116 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
-  dateBar: {
+  weekCard: {
+    marginHorizontal: 16,
+    marginTop: 12,
+    marginBottom: 4,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  weekHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    marginBottom: 10,
   },
-  navArrow: {
-    padding: 8,
+  monthButton: {
+    paddingVertical: 5,
+    paddingHorizontal: 10,
     borderRadius: 8,
-    backgroundColor: '#F8FAFC',
+    backgroundColor: TodoColors.accentSoft,
   },
-  dateCenter: {
+  monthButtonContent: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 6,
+    gap: 6,
+  },
+  monthButtonText: {
+    fontSize: 13.5,
+    fontWeight: '800',
+    color: TodoColors.accent,
+  },
+  weekNavArrows: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  weekArrowBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  weekDaysRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    gap: 6,
+  },
+  dayChip: {
+    flex: 1,
+    paddingVertical: 8,
     borderRadius: 10,
-    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
   },
-  dateCenterText: {
-    flexDirection: 'column',
+  dayChipToday: {
+    borderColor: BrandColors.primary,
+    backgroundColor: TodoColors.accentSoft,
   },
-  dateHint: {
+  dayChipSelected: {
+    backgroundColor: BrandColors.primary,
+    borderColor: BrandColors.primary,
+    shadowColor: BrandColors.primary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.2,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  dayChipName: {
     fontSize: 10.5,
-    fontWeight: '500',
-    color: TodoColors.faint,
-    marginTop: 1,
-  },
-  dateLabel: {
-    fontSize: 13,
     fontWeight: '700',
+    color: TodoColors.muted,
+    marginBottom: 2,
+  },
+  dayChipNameToday: {
     color: BrandColors.primary,
+  },
+  dayChipNameSelected: {
+    color: '#EDF1F8',
+  },
+  dayChipNum: {
+    fontSize: 14.5,
+    fontWeight: '800',
+    color: TodoColors.title,
+  },
+  dayChipNumToday: {
+    color: BrandColors.primary,
+  },
+  dayChipNumSelected: {
+    color: '#FFFFFF',
+  },
+  dayChipDot: {
+    width: 4,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: 'transparent',
+    marginTop: 4,
+  },
+  dayChipDotActive: {
+    backgroundColor: BrandColors.primary,
+  },
+  dayChipDotCompleted: {
+    backgroundColor: '#CBD5E1',
+  },
+  dayChipDotSelected: {
+    backgroundColor: '#FFE28A',
   },
   progressCard: {
     marginHorizontal: 16,

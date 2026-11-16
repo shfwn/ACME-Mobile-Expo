@@ -27,7 +27,6 @@ const MONTH_NAMES = [
 ];
 
 const DAY_NAMES = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
-const DAY_NAMES_FULL = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu', 'Minggu'];
 
 /** Tanggal lokal dalam bentuk YYYY-MM-DD tanpa geser zona waktu. */
 export function toIsoDate(date: Date): string {
@@ -42,11 +41,15 @@ export function fromIsoDate(iso: string): Date {
   return new Date(y, (m ?? 1) - 1, d ?? 1);
 }
 
-/** Label panjang: "Senin, 10 November 2026". */
-export function formatLongDate(iso: string): string {
+/**
+ * Label tanggal header: "10 November 2026".
+ *
+ * Tanpa nama hari: strip tanggal seminggu sudah menunjukkan hari, dan header
+ * Tasks/Jadwal butuh lebar untuk tombol menu di sisi kanan.
+ */
+export function formatDayMonthYear(iso: string): string {
   const date = fromIsoDate(iso);
-  const weekday = DAY_NAMES_FULL[(date.getDay() + 6) % 7];
-  return `${weekday}, ${date.getDate()} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
+  return `${date.getDate()} ${MONTH_NAMES[date.getMonth()]} ${date.getFullYear()}`;
 }
 
 /** Sel yang akan tampil pada grid bulanan (selalu kelipatan 7, mulai Senin). */
@@ -70,6 +73,8 @@ interface DatePickerSheetProps {
   onSelect: (iso: string) => void;
   /** Dipakai untuk menandai tanggal yang punya isi. */
   datesWithContent?: Set<string>;
+  /** Bila diisi, header ini yang dipakai (mis. "November 2026") alih-alih "Pilih Tanggal". */
+  monthTitle?: string;
 }
 
 /**
@@ -84,10 +89,17 @@ export const DatePickerSheet: React.FC<DatePickerSheetProps> = ({
   onClose,
   onSelect,
   datesWithContent,
+  monthTitle,
 }) => {
   const initial = useMemo(() => fromIsoDate(value), [value]);
   const [cursor, setCursor] = useState<Date>(initial);
+  const [prevValue, setPrevValue] = useState(value);
   const [showNativePicker, setShowNativePicker] = useState(false);
+
+  if (value !== prevValue) {
+    setPrevValue(value);
+    setCursor(fromIsoDate(value));
+  }
 
   const todayIso = toIsoDate(new Date());
   const cells = buildMonthGrid(cursor.getFullYear(), cursor.getMonth());
@@ -109,31 +121,35 @@ export const DatePickerSheet: React.FC<DatePickerSheetProps> = ({
       <View style={styles.backdrop}>
         <View style={styles.sheet}>
           <View style={styles.header}>
-            <Text style={styles.headerTitle}>Pilih Tanggal</Text>
+            <Text style={styles.headerTitle}>
+              {monthTitle ?? `${MONTH_NAMES[cursor.getMonth()]} ${cursor.getFullYear()}`}
+            </Text>
             <TouchableOpacity onPress={onClose} style={styles.closeButton} accessibilityLabel="Tutup">
               <X size={18} color={TodoColors.muted} />
             </TouchableOpacity>
           </View>
 
-          <View style={styles.monthBar}>
-            <TouchableOpacity
-              style={styles.monthArrow}
-              onPress={() => shiftMonth(-1)}
-              accessibilityLabel="Bulan sebelumnya"
-            >
-              <ChevronLeft size={18} color={TodoColors.body} />
-            </TouchableOpacity>
-            <Text style={styles.monthLabel}>
-              {MONTH_NAMES[cursor.getMonth()]} {cursor.getFullYear()}
-            </Text>
-            <TouchableOpacity
-              style={styles.monthArrow}
-              onPress={() => shiftMonth(1)}
-              accessibilityLabel="Bulan berikutnya"
-            >
-              <ChevronRight size={18} color={TodoColors.body} />
-            </TouchableOpacity>
-          </View>
+          {monthTitle ? null : (
+            <View style={styles.monthBar}>
+              <TouchableOpacity
+                style={styles.monthArrow}
+                onPress={() => shiftMonth(-1)}
+                accessibilityLabel="Bulan sebelumnya"
+              >
+                <ChevronLeft size={18} color={TodoColors.body} />
+              </TouchableOpacity>
+              <Text style={styles.monthLabel}>
+                {MONTH_NAMES[cursor.getMonth()]} {cursor.getFullYear()}
+              </Text>
+              <TouchableOpacity
+                style={styles.monthArrow}
+                onPress={() => shiftMonth(1)}
+                accessibilityLabel="Bulan berikutnya"
+              >
+                <ChevronRight size={18} color={TodoColors.body} />
+              </TouchableOpacity>
+            </View>
+          )}
 
           <View style={styles.weekHeader}>
             {DAY_NAMES.map((day) => (

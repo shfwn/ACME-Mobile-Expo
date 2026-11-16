@@ -1,27 +1,13 @@
 import { router, Tabs } from 'expo-router';
 import { TodoColors } from '../../constants/theme';
 import { AppHeaderTitle } from '../../components/app-header-title';
-import { CheckSquare, Calendar, BookOpen, Table2, LogOut } from 'lucide-react-native';
-import { TouchableOpacity, Alert, View, StyleSheet } from 'react-native';
+import { AvatarButton } from '../../components/profile-avatar';
+import { CheckSquare, Calendar, BookOpen, Table2 } from 'lucide-react-native';
+import { View, StyleSheet } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
 
 export default function ExecutiveTabsLayout() {
-  const logout = useAuthStore((s) => s.logout);
   const user = useAuthStore((s) => s.user);
-
-  const handleLogout = () => {
-    Alert.alert('Keluar Akun', 'Apakah Anda yakin ingin keluar dari workspace?', [
-      { text: 'Batal', style: 'cancel' },
-      {
-        text: 'Keluar',
-        style: 'destructive',
-        onPress: async () => {
-          await logout();
-          router.replace('/login');
-        },
-      },
-    ]);
-  };
 
   return (
     <Tabs
@@ -33,15 +19,15 @@ export default function ExecutiveTabsLayout() {
         headerTintColor: TodoColors.accent,
         headerShadowVisible: false,
         headerRightContainerStyle: { paddingRight: 4 },
+        // Avatar profil menggantikan tombol keluar: pengaturan akun dan log out
+        // sekarang tinggal di satu tempat, bukan tersebar di header.
         headerRight: () => (
           <View style={styles.headerRight}>
-            <TouchableOpacity
-              onPress={handleLogout}
-              style={styles.headerButton}
-              accessibilityLabel="Keluar"
-            >
-              <LogOut size={17} color={TodoColors.accent} />
-            </TouchableOpacity>
+            <AvatarButton
+              name={user?.name}
+              avatarUrl={user?.avatarUrl}
+              onPress={() => router.push('/profile')}
+            />
           </View>
         ),
         tabBarActiveTintColor: TodoColors.accent,
@@ -62,8 +48,8 @@ export default function ExecutiveTabsLayout() {
       <Tabs.Screen
         name="todos"
         options={{
-          title: 'To-Do Harian',
-          headerTitle: () => <AppHeaderTitle title="To-Do Harian" userName={user?.name} role={user?.role} />,
+          title: 'Tasks',
+          headerTitle: () => <AppHeaderTitle title="Tasks" userName={user?.name} role={user?.role} />,
           tabBarIcon: ({ color, size }) => <CheckSquare size={size} color={color} />,
         }}
       />
@@ -101,8 +87,5 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 10,
     marginRight: 12,
-  },
-  headerButton: {
-    padding: 6,
   },
 });

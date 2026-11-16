@@ -34,8 +34,6 @@ export interface PersonalNote {
   title: string;
   contentMarkdown: string;
   linkedDate?: string; // YYYY-MM-DD
-  tags: string[];
-  audioUrl?: string; // Mobile audio memo feature
   createdAt: string;
   updatedAt: string;
 }

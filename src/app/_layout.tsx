@@ -56,6 +56,11 @@ export default function RootLayout() {
           <Stack.Screen name="login" options={{ gestureEnabled: false }} />
           <Stack.Screen name="(executive)" options={{ gestureEnabled: false }} />
           <Stack.Screen name="(team)" options={{ gestureEnabled: false }} />
+          {/* Profil dibuka sebagai rute tunggal dari avatar header, di atas tab. */}
+          <Stack.Screen
+            name="profile"
+            options={{ headerShown: true, title: 'Profil', animation: 'slide_from_right' }}
+          />
         </Stack>
       </SafeAreaProvider>
     </GestureHandlerRootView>

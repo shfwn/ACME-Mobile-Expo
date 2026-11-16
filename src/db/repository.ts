@@ -215,8 +215,6 @@ export const notesRepository = {
       title: r.title,
       contentMarkdown: r.contentMarkdown,
       linkedDate: r.linkedDate ?? undefined,
-      tags: r.tagsJson ? JSON.parse(r.tagsJson) : [],
-      audioUrl: r.audioUrl ?? undefined,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
     }));
@@ -240,8 +238,6 @@ export const notesRepository = {
       title: data.title,
       contentMarkdown: data.contentMarkdown,
       linkedDate: data.linkedDate ?? null,
-      tagsJson: JSON.stringify(data.tags ?? []),
-      audioUrl: data.audioUrl ?? null,
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
@@ -256,8 +252,6 @@ export const notesRepository = {
       title?: string;
       contentMarkdown?: string;
       linkedDate?: string | null;
-      tags?: string[];
-      audioUrl?: string | null;
     }
   ): Promise<void> {
     const db = getDb();
@@ -266,8 +260,6 @@ export const notesRepository = {
     if (updates.title !== undefined) patch.title = updates.title;
     if (updates.contentMarkdown !== undefined) patch.contentMarkdown = updates.contentMarkdown;
     if (updates.linkedDate !== undefined) patch.linkedDate = updates.linkedDate;
-    if (updates.tags !== undefined) patch.tagsJson = JSON.stringify(updates.tags);
-    if (updates.audioUrl !== undefined) patch.audioUrl = updates.audioUrl;
 
     await db.update(personalNotesTable).set(patch).where(eq(personalNotesTable.id, id));
   },

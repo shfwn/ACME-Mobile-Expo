@@ -22,6 +22,7 @@ export interface AuthStoreState {
     role?: Role;
   }) => Promise<{ success: true; user: User } | { success: false; error: string }>;
   loginWithBiometrics: () => Promise<boolean>;
+  refreshUser: () => Promise<void>;
   logout: () => Promise<void>;
 }
 
@@ -29,7 +30,7 @@ function isExecutiveRole(role: Role): boolean {
   return role === 'OWNER' || role === 'MILT';
 }
 
-export const useAuthStore = create<AuthStoreState>((set) => ({
+export const useAuthStore = create<AuthStoreState>((set, get) => ({
   user: null,
   isLoading: true,
   isAuthenticated: false,
@@ -136,6 +137,23 @@ export const useAuthStore = create<AuthStoreState>((set) => ({
       isExecutiveMode: isExecutiveRole(user.role),
     });
     return true;
+  },
+
+  /**
+   * Tarik ulang profil dari SQLite ke state.
+   *
+   * Dipanggil setelah halaman Profil menyimpan perubahan, supaya header dan
+   * avatar memakai nama/email baru tanpa perlu login ulang.
+   */
+  refreshUser: async () => {
+    const current = get().user;
+    if (!current) return;
+    const fresh = await accountRepository.getUserById(current.id);
+    if (!fresh) return;
+    set({
+      user: fresh,
+      isExecutiveMode: isExecutiveRole(fresh.role),
+    });
   },
 
   logout: async () => {

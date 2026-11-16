@@ -317,6 +317,67 @@ export const accountRepository = {
       .where(eq(usersTable.id, userId));
   },
 
+  /**
+   * Ubah profil (nama, email, foto).
+   *
+   * Email tetap unik: bila alamat baru sudah dipakai akun lain, perubahan
+   * ditolak dan pesan dikembalikan — bukan dilempar sebagai exception, karena
+   * pemanggilnya adalah form yang perlu menampilkannya di dekat field.
+   */
+  async updateProfile(
+    userId: string,
+    input: { name?: string; email?: string; avatarUrl?: string | null }
+  ): Promise<{ success: true; user: User } | { success: false; error: string }> {
+    const db = getDb();
+
+    const [current] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!current) return { success: false, error: 'Akun tidak ditemukan' };
+
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (input.name !== undefined) {
+      const name = input.name.trim();
+      if (!name) return { success: false, error: 'Nama tidak boleh kosong' };
+      patch.name = name;
+    }
+
+    if (input.email !== undefined) {
+      const email = input.email.trim().toLowerCase();
+      if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+        return { success: false, error: 'Format email tidak valid' };
+      }
+      if (email !== current.email) {
+        const [taken] = await db
+          .select({ id: usersTable.id })
+          .from(usersTable)
+          .where(eq(usersTable.email, email));
+        if (taken) return { success: false, error: 'Email sudah dipakai akun lain' };
+      }
+      patch.email = email;
+    }
+
+    if (input.avatarUrl !== undefined) patch.avatarUrl = input.avatarUrl;
+
+    await db.update(usersTable).set(patch).where(eq(usersTable.id, userId));
+
+    const [updated] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    return { success: true, user: toPublicUser(updated as StoredUserRow) };
+  },
+
+  /**
+   * Cocokkan kata sandi akun tanpa mengubah apa pun.
+   *
+   * Dipakai sebagai gerbang konfirmasi: perubahan email atau kata sandi harus
+   * dibuktikan dengan kata sandi saat ini, sehingga perangkat yang ditinggal
+   * terbuka tidak bisa dipakai mengganti kredensial.
+   */
+  async confirmPassword(userId: string, password: string): Promise<boolean> {
+    const db = getDb();
+    const [row] = await db.select().from(usersTable).where(eq(usersTable.id, userId));
+    if (!row) return false;
+    return verifyPassword(password, { hash: row.passwordHash, salt: row.passwordSalt });
+  },
+
   async setActive(userId: string, isActive: boolean): Promise<void> {
     const db = getDb();
     await db

@@ -48,8 +48,6 @@ export const personalNotesTable = sqliteTable('personal_notes', {
   title: text('title').notNull(),
   contentMarkdown: text('content_markdown').notNull().default(''),
   linkedDate: text('linked_date'), // YYYY-MM-DD
-  tagsJson: text('tags_json').default('[]'),
-  audioUrl: text('audio_url'), // Memo suara mobile
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
@@ -171,4 +169,15 @@ export const notificationsTable = sqliteTable('notifications', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
+});
+
+// 13. Calendar Days (penanda warna + catatan per tanggal)
+export const calendarDaysTable = sqliteTable('calendar_days', {
+  id: text('id').primaryKey(),
+  userId: text('user_id').notNull(),
+  date: text('date').notNull(), // YYYY-MM-DD
+  color: text('color').notNull().default('periwinkle'),
+  note: text('note'),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
 });

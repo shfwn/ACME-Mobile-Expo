@@ -279,6 +279,7 @@ const accountsModule = load('src/db/account.repository.ts');
 const accounts = accountsModule.accountRepository;
 const teamRepo = load('src/db/team.repository.ts');
 const todoRepo = load('src/db/repository.ts');
+const calendarRepo = load('src/db/calendar.repository.ts');
 const { getRawSqliteDb } = load('src/db/client.ts');
 
 await check('hash kata sandi deterministik untuk salt yang sama', async () => {
@@ -303,12 +304,20 @@ await check('kata sandi salah ditolak', async () => {
 await check('migrasi berjalan dan skema versi tercatat', async () => {
   getRawSqliteDb();
   const [{ user_version: version }] = sqliteHandle.prepare('PRAGMA user_version').all();
-  assert.equal(version, 2);
+  assert.equal(version, 4);
   const tables = sqliteHandle
     .prepare("SELECT name FROM sqlite_master WHERE type='table' ORDER BY name")
     .all()
     .map((r) => r.name);
-  for (const expected of ['users', 'workspaces', 'projects', 'custom_statuses', 'tasks', 'personal_todos']) {
+  for (const expected of [
+    'users',
+    'workspaces',
+    'projects',
+    'custom_statuses',
+    'tasks',
+    'personal_todos',
+    'calendar_days',
+  ]) {
     assert.ok(tables.includes(expected), `tabel ${expected} tidak ada`);
   }
   assert.ok(!tables.includes('sync_meta'), 'sync_meta seharusnya sudah dihapus');
@@ -505,11 +514,10 @@ await check('catatan harian dan link spreadsheet tersimpan lokal', async () => {
     userId: owner.id,
     title: 'Catatan harian',
     contentMarkdown: 'Hari ini mengerjakan migrasi SQLite.',
-    tags: ['migrasi'],
+    linkedDate: '2026-11-16',
   });
   const notes = await todoRepo.notesRepository.getAll(owner.id);
   assert.equal(notes.length, 1);
-  assert.deepEqual(notes[0].tags, ['migrasi']);
   await todoRepo.notesRepository.softDelete(note.id);
   assert.equal((await todoRepo.notesRepository.getAll(owner.id)).length, 0);
 
@@ -587,6 +595,84 @@ await check('subtask tersimpan di SQLite dan bertahan antar-baca', async () => {
   const [finished] = await todoRepo.todoRepository.getByDate(owner.id, today);
   assert.equal(finished.isCompleted, true);
   await todoRepo.todoRepository.softDelete(created.id);
+});
+
+
+// ---------------------------------------------------------------- calendar
+
+await check('penanda kalender tersimpan per tanggal dan per pengguna', async () => {
+  const owner = await accounts.getUserByEmail('owner@company.com');
+  const member = await accounts.getUserByEmail('andi@company.com');
+  const iso = '2026-11-20';
+
+  await calendarRepo.calendarRepository.setDay(owner.id, iso, {
+    color: 'mint',
+    note: 'Review anggaran',
+  });
+  await calendarRepo.calendarRepository.setDay(owner.id, '2026-11-21', {
+    color: 'yellow',
+    note: '',
+  });
+
+  const marks = await calendarRepo.calendarRepository.getMarks(owner.id, '2026-11-01', '2026-11-30');
+  assert.equal(marks.length, 2);
+  const day = marks.find((m) => m.date === iso);
+  assert.equal(day.color, 'mint');
+  assert.equal(day.note, 'Review anggaran');
+
+  const memberMarks = await calendarRepo.calendarRepository.getMarks(
+    member.id,
+    '2026-11-01',
+    '2026-11-30'
+  );
+  assert.equal(memberMarks.length, 0, 'penanda pengguna lain tidak boleh terlihat');
+});
+
+await check('penanda tanggal dihapus saat dikosongkan', async () => {
+  const owner = await accounts.getUserByEmail('owner@company.com');
+  const iso = '2026-11-20';
+
+  await calendarRepo.calendarRepository.clearDay(owner.id, iso);
+  const marks = await calendarRepo.calendarRepository.getMarks(owner.id, '2026-11-01', '2026-11-30');
+  assert.equal(marks.length, 1, 'hanya tanggal 21 yang tersisa');
+  assert.equal(marks[0].date, '2026-11-21');
+});
+
+await check('sinyal titik kalender: aktif vs selesai', async () => {
+  const member = await accounts.getUserByEmail('andi@company.com');
+  const iso = '2026-11-22';
+
+  const a = await todoRepo.todoRepository.create({
+    userId: member.id,
+    title: 'Tugas aktif',
+    targetDate: iso,
+    isCompleted: false,
+    priority: 'HIGH',
+    category: 'Kerja',
+    colorTheme: 'pink',
+  });
+  await todoRepo.todoRepository.create({
+    userId: member.id,
+    title: 'Tugas selesai',
+    targetDate: '2026-11-23',
+    isCompleted: true,
+    priority: 'LOW',
+    category: 'Kerja',
+    colorTheme: 'mint',
+  });
+
+  let signals = await calendarRepo.calendarRepository.getTodoSignals(
+    member.id,
+    '2026-11-01',
+    '2026-11-30'
+  );
+  assert.equal(signals[iso].pending, 1);
+  assert.equal(signals[iso].color, 'pink', 'warna titik mengikuti to-do yang belum selesai');
+  assert.equal(signals['2026-11-23'].pending, 0, 'tanggal yang semua selesai punya 0 pending');
+
+  await todoRepo.todoRepository.setCompleted(a.id, true);
+  signals = await calendarRepo.calendarRepository.getTodoSignals(member.id, '2026-11-01', '2026-11-30');
+  assert.equal(signals[iso].pending, 0);
 });
 
 const failed = results.filter((r) => !r.ok);

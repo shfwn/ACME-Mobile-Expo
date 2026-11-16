@@ -5,230 +5,32 @@ import * as schema from './schema';
 const DB_NAME = 'acme_mobile_v1.db';
 
 /**
- * Naikkan angka ini setiap kali bentuk tabel berubah. Migrasi berjalan sekali
- * per versi; `PRAGMA user_version` adalah penanda yang dipakai SQLite sendiri.
+ * Naikkan angka ini setiap kali bentuk tabel berubah, lalu tambahkan satu blok
+ * `if (current < N)` di `runMigrations`. Versi sebelumnya tidak boleh diubah:
+ * perangkat yang sudah terpasang hanya menjalankan langkah yang belum dilewati.
  */
-const SCHEMA_VERSION = 2;
+const SCHEMA_VERSION = 4;
 
 export type AppDatabase = ExpoSQLiteDatabase<typeof schema>;
 
 let sqliteDbInstance: SQLiteDatabase | null = null;
 let drizzleInstance: AppDatabase | null = null;
 
-interface TableColumn {
-  name: string;
-}
-
-function columnNames(db: SQLiteDatabase, table: string): Set<string> {
-  return new Set(
-    (db.getAllSync<TableColumn>(`PRAGMA table_info(${table})`) ?? []).map((c) => c.name)
-  );
-}
-
-function dropOldTable(db: SQLiteDatabase, table: string): void {
-  db.execSync(`DROP TABLE IF EXISTS ${table}__old;`);
-}
-
 /**
- * Versi 1: skema awal aplikasi (tabel to-do, catatan, task, status, dsb).
- * Tabel users pada versi ini hanya cache profil tanpa kredensial.
+ * Skema lengkap, ditulis sekali dan dipakai dua jalur:
+ * - instalasi baru (user_version 0) cukup menjalankannya sekali, tanpa perlu
+ *   melewati migrasi lama yang tabelnya langsung dibuat ulang;
+ * - versi 1 hanya pernah terpasang di dalam proyek ini, jadi tidak ada data
+ *   pengguna yang perlu diselamatkan dari bentuk skemanya.
+ *
+ * Semua `IF NOT EXISTS` supaya idempoten: menjalankannya dua kali aman.
  */
-function migrateToV1(db: SQLiteDatabase): void {
+function createSchema(db: SQLiteDatabase): void {
   db.execSync(`
     PRAGMA journal_mode = WAL;
     PRAGMA foreign_keys = ON;
 
     CREATE TABLE IF NOT EXISTS users (
-      id TEXT PRIMARY KEY NOT NULL,
-      email TEXT NOT NULL UNIQUE,
-      name TEXT NOT NULL,
-      role TEXT NOT NULL,
-      avatar_url TEXT,
-      weekly_capacity_hours REAL DEFAULT 40.0,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS personal_todos (
-      id TEXT PRIMARY KEY NOT NULL,
-      user_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      description TEXT,
-      target_date TEXT NOT NULL,
-      start_time TEXT,
-      end_time TEXT,
-      is_completed INTEGER NOT NULL DEFAULT 0,
-      priority TEXT NOT NULL DEFAULT 'MEDIUM',
-      category TEXT NOT NULL DEFAULT 'Kerja',
-      color_theme TEXT NOT NULL DEFAULT 'yellow',
-      subtasks_json TEXT DEFAULT '[]',
-      reminder_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push',
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      next_retry_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_todos_user_date ON personal_todos (user_id, target_date);
-
-    CREATE TABLE IF NOT EXISTS personal_notes (
-      id TEXT PRIMARY KEY NOT NULL,
-      user_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      content_markdown TEXT NOT NULL DEFAULT '',
-      linked_date TEXT,
-      tags_json TEXT DEFAULT '[]',
-      audio_url TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push',
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      next_retry_at TEXT
-    );
-
-    CREATE INDEX IF NOT EXISTS idx_notes_user_date ON personal_notes (user_id, linked_date);
-
-    CREATE TABLE IF NOT EXISTS saved_sheet_links (
-      id TEXT PRIMARY KEY NOT NULL,
-      user_id TEXT NOT NULL,
-      title TEXT NOT NULL,
-      url TEXT NOT NULL,
-      category TEXT NOT NULL DEFAULT 'Spreadsheet',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push'
-    );
-
-    CREATE TABLE IF NOT EXISTS tasks (
-      id TEXT PRIMARY KEY NOT NULL,
-      project_id TEXT NOT NULL,
-      status_id TEXT NOT NULL,
-      creator_id TEXT NOT NULL,
-      assignee_id TEXT,
-      title TEXT NOT NULL,
-      description TEXT,
-      priority TEXT NOT NULL DEFAULT 'MEDIUM',
-      estimated_hours REAL DEFAULT 0,
-      due_date TEXT,
-      order_index INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push',
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      next_retry_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS subtasks (
-      id TEXT PRIMARY KEY NOT NULL,
-      task_id TEXT NOT NULL,
-      assignee_id TEXT,
-      title TEXT NOT NULL,
-      is_completed INTEGER NOT NULL DEFAULT 0,
-      order_index INTEGER DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push',
-      retry_count INTEGER NOT NULL DEFAULT 0,
-      next_retry_at TEXT
-    );
-
-    CREATE TABLE IF NOT EXISTS time_logs (
-      id TEXT PRIMARY KEY NOT NULL,
-      task_id TEXT,
-      todo_id TEXT,
-      user_id TEXT NOT NULL,
-      duration_minutes INTEGER NOT NULL DEFAULT 0,
-      duration_seconds INTEGER NOT NULL DEFAULT 0,
-      note TEXT,
-      started_at TEXT,
-      ended_at TEXT,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push'
-    );
-
-    CREATE TABLE IF NOT EXISTS sync_meta (
-      key TEXT PRIMARY KEY NOT NULL,
-      value TEXT NOT NULL,
-      updated_at TEXT NOT NULL
-    );
-
-    CREATE TABLE IF NOT EXISTS projects (
-      id TEXT PRIMARY KEY NOT NULL,
-      workspace_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      description TEXT,
-      color TEXT NOT NULL DEFAULT '#3B82F6',
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push'
-    );
-
-    CREATE TABLE IF NOT EXISTS custom_statuses (
-      id TEXT PRIMARY KEY NOT NULL,
-      project_id TEXT NOT NULL,
-      name TEXT NOT NULL,
-      order_index INTEGER NOT NULL DEFAULT 0,
-      color TEXT NOT NULL DEFAULT '#94A3B8',
-      is_done_state INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push'
-    );
-
-    CREATE TABLE IF NOT EXISTS task_comments (
-      id TEXT PRIMARY KEY NOT NULL,
-      task_id TEXT NOT NULL,
-      user_id TEXT NOT NULL,
-      content TEXT NOT NULL,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push'
-    );
-
-    CREATE TABLE IF NOT EXISTS notifications (
-      id TEXT PRIMARY KEY NOT NULL,
-      user_id TEXT NOT NULL,
-      actor_id TEXT,
-      title TEXT NOT NULL,
-      message TEXT NOT NULL,
-      link_url TEXT,
-      is_read INTEGER NOT NULL DEFAULT 0,
-      created_at TEXT NOT NULL,
-      updated_at TEXT NOT NULL,
-      deleted_at TEXT,
-      sync_status TEXT NOT NULL DEFAULT 'pending_push'
-    );
-  `);
-}
-
-/**
- * Versi 2: SQLite menjadi satu-satunya sumber kebenaran.
- * - `users` mendapat kredensial (hash + salt) sehingga login tidak butuh server.
- * - kolom `sync_status`/`retry_*`/`sync_meta` dibuang: tidak ada lagi server untuk
- *   disinkronkan, dan menyisakannya berarti terus mengirim data yang tidak ada tujuannya.
- * - tabel `workspaces` ditambahkan agar project punya induk yang nyata.
- *
- * Tabel users dibangun ulang karena kolom NOT NULL tidak bisa ditambahkan lewat
- * ALTER TABLE. Baris cache lama (tanpa kredensial) dibuang: data awal memang kosong.
- */
-function migrateToV2(db: SQLiteDatabase): void {
-  db.execSync('PRAGMA foreign_keys = OFF;');
-
-  db.execSync(`
-    DROP TABLE IF EXISTS users;
-    DROP TABLE IF EXISTS sync_meta;
-
-    CREATE TABLE users (
       id TEXT PRIMARY KEY NOT NULL,
       email TEXT NOT NULL UNIQUE,
       name TEXT NOT NULL,
@@ -250,57 +52,205 @@ function migrateToV2(db: SQLiteDatabase): void {
       created_at TEXT NOT NULL,
       updated_at TEXT NOT NULL
     );
-  `);
 
-  dropOldTable(db, 'personal_todos');
-  dropOldTable(db, 'personal_notes');
-  dropOldTable(db, 'saved_sheet_links');
-  dropOldTable(db, 'tasks');
-  dropOldTable(db, 'subtasks');
-  dropOldTable(db, 'time_logs');
-  dropOldTable(db, 'projects');
-  dropOldTable(db, 'custom_statuses');
-  dropOldTable(db, 'task_comments');
-  dropOldTable(db, 'notifications');
+    CREATE TABLE IF NOT EXISTS personal_todos (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      description TEXT,
+      target_date TEXT NOT NULL,
+      start_time TEXT,
+      end_time TEXT,
+      is_completed INTEGER NOT NULL DEFAULT 0,
+      priority TEXT NOT NULL DEFAULT 'MEDIUM',
+      category TEXT NOT NULL DEFAULT 'Kerja',
+      color_theme TEXT NOT NULL DEFAULT 'yellow',
+      subtasks_json TEXT DEFAULT '[]',
+      reminder_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_todos_user_date ON personal_todos (user_id, target_date);
 
-  for (const table of ['personal_todos', 'personal_notes', 'tasks', 'subtasks']) {
-    const cols = columnNames(db, table);
-    if (cols.has('sync_status')) db.execSync(`ALTER TABLE ${table} DROP COLUMN sync_status;`);
-    if (cols.has('retry_count')) db.execSync(`ALTER TABLE ${table} DROP COLUMN retry_count;`);
-    if (cols.has('next_retry_at')) db.execSync(`ALTER TABLE ${table} DROP COLUMN next_retry_at;`);
-  }
+    CREATE TABLE IF NOT EXISTS personal_notes (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      content_markdown TEXT NOT NULL DEFAULT '',
+      linked_date TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_notes_user_date ON personal_notes (user_id, linked_date);
 
-  for (const table of [
-    'saved_sheet_links',
-    'projects',
-    'custom_statuses',
-    'task_comments',
-    'notifications',
-    'time_logs',
-  ]) {
-    if (columnNames(db, table).has('sync_status')) {
-      db.execSync(`ALTER TABLE ${table} DROP COLUMN sync_status;`);
-    }
-  }
+    CREATE TABLE IF NOT EXISTS saved_sheet_links (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      title TEXT NOT NULL,
+      url TEXT NOT NULL,
+      category TEXT NOT NULL DEFAULT 'Spreadsheet',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
 
-  db.execSync(`
+    CREATE TABLE IF NOT EXISTS tasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      project_id TEXT NOT NULL,
+      status_id TEXT NOT NULL,
+      creator_id TEXT NOT NULL,
+      assignee_id TEXT,
+      title TEXT NOT NULL,
+      description TEXT,
+      priority TEXT NOT NULL DEFAULT 'MEDIUM',
+      estimated_hours REAL DEFAULT 0,
+      due_date TEXT,
+      order_index INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks (project_id);
     CREATE INDEX IF NOT EXISTS idx_tasks_assignee ON tasks (assignee_id);
+
+    CREATE TABLE IF NOT EXISTS subtasks (
+      id TEXT PRIMARY KEY NOT NULL,
+      task_id TEXT NOT NULL,
+      assignee_id TEXT,
+      title TEXT NOT NULL,
+      is_completed INTEGER NOT NULL DEFAULT 0,
+      order_index INTEGER DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_subtasks_task ON subtasks (task_id);
-    CREATE INDEX IF NOT EXISTS idx_statuses_project ON custom_statuses (project_id);
-    CREATE INDEX IF NOT EXISTS idx_comments_task ON task_comments (task_id);
+
+    CREATE TABLE IF NOT EXISTS time_logs (
+      id TEXT PRIMARY KEY NOT NULL,
+      task_id TEXT,
+      todo_id TEXT,
+      user_id TEXT NOT NULL,
+      duration_minutes INTEGER NOT NULL DEFAULT 0,
+      duration_seconds INTEGER NOT NULL DEFAULT 0,
+      note TEXT,
+      started_at TEXT,
+      ended_at TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_time_logs_task ON time_logs (task_id);
     CREATE INDEX IF NOT EXISTS idx_time_logs_user ON time_logs (user_id);
+
+    CREATE TABLE IF NOT EXISTS projects (
+      id TEXT PRIMARY KEY NOT NULL,
+      workspace_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      description TEXT,
+      color TEXT NOT NULL DEFAULT '#3B82F6',
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+
+    CREATE TABLE IF NOT EXISTS custom_statuses (
+      id TEXT PRIMARY KEY NOT NULL,
+      project_id TEXT NOT NULL,
+      name TEXT NOT NULL,
+      order_index INTEGER NOT NULL DEFAULT 0,
+      color TEXT NOT NULL DEFAULT '#94A3B8',
+      is_done_state INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_statuses_project ON custom_statuses (project_id);
+
+    CREATE TABLE IF NOT EXISTS task_comments (
+      id TEXT PRIMARY KEY NOT NULL,
+      task_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      content TEXT NOT NULL,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
+    CREATE INDEX IF NOT EXISTS idx_comments_task ON task_comments (task_id);
+
+    CREATE TABLE IF NOT EXISTS notifications (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      actor_id TEXT,
+      title TEXT NOT NULL,
+      message TEXT NOT NULL,
+      link_url TEXT,
+      is_read INTEGER NOT NULL DEFAULT 0,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL,
+      deleted_at TEXT
+    );
     CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications (user_id);
+
     CREATE INDEX IF NOT EXISTS idx_users_email ON users (email);
   `);
+}
 
-  db.execSync('PRAGMA foreign_keys = ON;');
+/**
+ * Versi 3: penanda kalender per tanggal.
+ *
+ * Warna dan catatan adalah milik pengguna, bukan milik to-do: satu tanggal bisa
+ * diwarnai tanpa harus punya to-do, dan warnanya tetap ada setelah to-do-nya
+ * selesai. `(user_id, date)` unik sehingga satu baris = satu tanggal.
+ */
+function migrateToV3(db: SQLiteDatabase): void {
+  db.execSync(`
+    CREATE TABLE IF NOT EXISTS calendar_days (
+      id TEXT PRIMARY KEY NOT NULL,
+      user_id TEXT NOT NULL,
+      date TEXT NOT NULL,
+      color TEXT NOT NULL DEFAULT 'periwinkle',
+      note TEXT,
+      created_at TEXT NOT NULL,
+      updated_at TEXT NOT NULL
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS idx_calendar_days_user_date
+      ON calendar_days (user_id, date);
+  `);
+}
+
+/**
+ * Versi 4: `personal_notes` kehilangan `tags_json` dan `audio_url`.
+ *
+ * Keduanya tidak punya pemakai lagi setelah kategori dan memo suara dicabut dari
+ * layar Catatan. Kolom dibiarkan hanya akan menambah lebar baris dan
+ * membingungkan pembaca skema.
+ */
+function migrateToV4(db: SQLiteDatabase): void {
+  const columns = new Set(
+    (db.getAllSync<{ name: string }>('PRAGMA table_info(personal_notes)') ?? []).map((c) => c.name)
+  );
+
+  if (columns.has('tags_json')) {
+    db.execSync('ALTER TABLE personal_notes DROP COLUMN tags_json;');
+  }
+  if (columns.has('audio_url')) {
+    db.execSync('ALTER TABLE personal_notes DROP COLUMN audio_url;');
+  }
 }
 
 /**
  * Jalankan migrasi bertahap. Setiap langkah idempoten terhadap `user_version`,
  * jadi aman dipanggil setiap kali aplikasi dibuka.
+ *
+ * Versi 1 dan 2 adalah bentuk sementara selama proyek ini belum dirilis:
+ *  - v1 menyimpan kolom antrean sync (`sync_status`, `retry_count`, `sync_meta`)
+ *    yang sudah dibuang bersama engine sync-nya;
+ *  - v2 membangun ulang `users` dan membuang kolom tersebut lewat `ALTER TABLE`.
+ * Keduanya digantikan `createSchema`: instalasi baru langsung mendapat bentuk
+ * akhir tanpa melewati langkah yang hasil akhirnya sama.
  */
 export function runMigrations(db: SQLiteDatabase): void {
   const [{ user_version: current }] = db.getAllSync<{ user_version: number }>(
@@ -308,22 +258,23 @@ export function runMigrations(db: SQLiteDatabase): void {
   );
   if (current >= SCHEMA_VERSION) return;
 
+  // Kosong (0) atau masih di versi lama: bangun skema penuh, lalu lanjutkan
+  // langkah yang menambah tabel baru di atasnya.
+  createSchema(db);
   if (current < 1) {
-    migrateToV1(db);
     db.execSync('PRAGMA user_version = 1');
   }
   if (current < 2) {
-    migrateToV2(db);
     db.execSync('PRAGMA user_version = 2');
   }
-}
-
-/**
- * Kompatibilitas dengan pemanggil lama.
- * @deprecated gunakan runMigrations
- */
-export function initDatabaseTables(db: SQLiteDatabase): void {
-  runMigrations(db);
+  if (current < 3) {
+    migrateToV3(db);
+    db.execSync('PRAGMA user_version = 3');
+  }
+  if (current < 4) {
+    migrateToV4(db);
+    db.execSync('PRAGMA user_version = 4');
+  }
 }
 
 function openAppDatabase(): SQLiteDatabase {

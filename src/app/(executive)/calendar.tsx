@@ -1,507 +1,818 @@
-import React, { useState, useCallback, useMemo } from 'react';
+import React, { useCallback, useMemo, useState } from 'react';
 import {
-  View,
-  Text,
-  ScrollView,
-  TouchableOpacity,
   ActivityIndicator,
+  Alert,
+  Modal,
+  Pressable,
+  ScrollView,
   StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
 } from 'react-native';
-import { useAuthStore } from '../../store/auth.store';
 import { useFocusEffect } from 'expo-router';
-import { todoRepository } from '../../db/repository';
-import { PersonalTodo, PersonalTodoColor, Priority, PersonalTodoSubtask } from '../../types/todo.types';
+import {
+  CalendarDays,
+  Check,
+  StickyNote,
+  Trash2,
+  X,
+} from 'lucide-react-native';
+import { useAuthStore } from '../../store/auth.store';
+import {
+  CALENDAR_COLORS,
+  calendarRepository,
+  type CalendarDayMark,
+  type DayTodoSignal,
+} from '../../db/calendar.repository';
+import type { PersonalTodoColor } from '../../types/todo.types';
 import { BrandColors, TodoColors } from '../../constants/theme';
-import { WeekDateStrip } from '../../components/week-date-strip';
-import { DatePickerSheet, formatLongDate, toIsoDate } from '../../components/date-picker-sheet';
-import { CreateTodoModal } from '../../components/create-todo-modal';
-import { Plus, Clock, AlertTriangle, Check, CalendarDays, ChevronDown } from 'lucide-react-native';
+import {
+  DatePickerSheet,
+  formatDayMonthYear,
+  fromIsoDate,
+  toIsoDate,
+} from '../../components/date-picker-sheet';
 
-function timeToMinutes(timeStr?: string): number {
-  if (!timeStr) return -1;
-  const parts = timeStr.split(':');
-  if (parts.length !== 2) return -1;
-  const h = parseInt(parts[0], 10);
-  const m = parseInt(parts[1], 10);
-  if (isNaN(h) || isNaN(m)) return -1;
-  return h * 60 + m;
+const MONTH_NAMES = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
+const WEEKDAY_HEADERS = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
+
+const COLOR_LABEL: Record<PersonalTodoColor, string> = {
+  yellow: 'Kuning',
+  pink: 'Coral',
+  mint: 'Mint',
+  periwinkle: 'Periwinkle',
+};
+
+interface DayCell {
+  iso: string;
+  dayNum: number;
+  weekday: number;
+}
+
+/** Tanggal 1..akhir bulan, plus jumlah sel kosong sebelum tanggal 1 (Senin = index 0). */
+function buildMonth(year: number, month: number): { cells: DayCell[]; leading: number } {
+  const total = new Date(year, month + 1, 0).getDate();
+  const cells: DayCell[] = Array.from({ length: total }, (_, i) => {
+    const date = new Date(year, month, i + 1);
+    return {
+      iso: toIsoDate(date),
+      dayNum: i + 1,
+      weekday: (date.getDay() + 6) % 7,
+    };
+  });
+
+  return { cells, leading: cells[0]?.weekday ?? 0 };
 }
 
 export default function ExecutiveCalendarScreen() {
   const user = useAuthStore((s) => s.user);
   const userId = user?.id ?? '';
 
-  const todayIso = toIsoDate(new Date());
-  const [selectedDate, setSelectedDate] = useState<string>(todayIso);
-  const [isDatePickerOpen, setIsDatePickerOpen] = useState<boolean>(false);
-  const [todos, setTodos] = useState<PersonalTodo[]>([]);
-  const [allUserTodos, setAllUserTodos] = useState<PersonalTodo[]>([]);
+  const now = new Date();
+  const todayIso = toIsoDate(now);
+  const [year, setYear] = useState<number>(now.getFullYear());
+  const [month, setMonth] = useState<number>(now.getMonth());
+  const [marks, setMarks] = useState<Record<string, CalendarDayMark>>({});
+  const [signals, setSignals] = useState<Record<string, DayTodoSignal>>({});
   const [isLoading, setIsLoading] = useState<boolean>(true);
-  const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
+  const [isMonthPickerOpen, setIsMonthPickerOpen] = useState<boolean>(false);
 
-  const loadData = useCallback(async () => {
+  // Editor tanggal
+  const [editingDate, setEditingDate] = useState<string | null>(null);
+  const [draftColor, setDraftColor] = useState<PersonalTodoColor | null>(null);
+  const [draftNote, setDraftNote] = useState<string>('');
+  const [isSaving, setIsSaving] = useState<boolean>(false);
+
+  const isCurrentMonth = year === now.getFullYear() && month === now.getMonth();
+
+  const { cells, leading } = useMemo(() => buildMonth(year, month), [month, year]);
+
+  const loadMonth = useCallback(async () => {
     setIsLoading(true);
     try {
-      const [dayData, allData] = await Promise.all([
-        todoRepository.getByDate(userId, selectedDate),
-        todoRepository.getAllByUser(userId),
+      const first = toIsoDate(new Date(year, month, 1));
+      const last = toIsoDate(new Date(year, month + 1, 0));
+
+      const [markList, signalMap] = await Promise.all([
+        calendarRepository.getMarks(userId, first, last),
+        calendarRepository.getTodoSignals(userId, first, last),
       ]);
-      setTodos(dayData);
-      setAllUserTodos(allData);
+
+      const markMap: Record<string, CalendarDayMark> = {};
+      for (const mark of markList) markMap[mark.date] = mark;
+
+      setMarks(markMap);
+      setSignals(signalMap);
     } catch (e) {
       console.warn('Gagal memuat kalender:', e);
+      setMarks({});
+      setSignals({});
     } finally {
       setIsLoading(false);
     }
-  }, [userId, selectedDate]);
+  }, [month, userId, year, setIsLoading, setMarks, setSignals]);
 
   useFocusEffect(
     useCallback(() => {
-      loadData();
-    }, [loadData])
+      loadMonth();
+    }, [loadMonth])
   );
 
-  // Set of dates with events for dot indicators
-  const datesWithEvents = useMemo(() => {
-    const s = new Set<string>();
-    for (const t of allUserTodos) {
-      s.add(t.targetDate);
-    }
-    return s;
-  }, [allUserTodos]);
+  const openEditor = (iso: string) => {
+    const existing = marks[iso];
+    setDraftColor(existing ? existing.color : null);
+    setDraftNote(existing?.note ?? '');
+    setEditingDate(iso);
+  };
 
-  // Conflict detection algorithm
-  const conflictingTodoIds = useMemo(() => {
-    const conflicts = new Set<string>();
-    const timedTodos = todos.filter((t) => t.startTime && t.endTime);
+  const closeEditor = () => {
+    setEditingDate(null);
+    setIsSaving(false);
+  };
 
-    for (let i = 0; i < timedTodos.length; i++) {
-      const a = timedTodos[i];
-      const startA = timeToMinutes(a.startTime);
-      const endA = timeToMinutes(a.endTime);
+  const handleSelectColor = (color: PersonalTodoColor) => {
+    setDraftColor((prev) => (prev === color ? null : color));
+  };
 
-      for (let j = i + 1; j < timedTodos.length; j++) {
-        const b = timedTodos[j];
-        const startB = timeToMinutes(b.startTime);
-        const endB = timeToMinutes(b.endTime);
-
-        if (startA < endB && startB < endA) {
-          conflicts.add(a.id);
-          conflicts.add(b.id);
-        }
-      }
-    }
-    return conflicts;
-  }, [todos]);
-
-  const handleToggle = async (id: string) => {
-    await todoRepository.toggleComplete(id);
-    setTodos((prev) =>
-      prev.map((t) => (t.id === id ? { ...t, isCompleted: !t.isCompleted } : t))
+  const confirmClear = (iso: string) => {
+    Alert.alert(
+      'Hapus Penanda',
+      `Warna dan catatan pada ${formatDayMonthYear(iso)} akan dihapus.`,
+      [
+        { text: 'Batal', style: 'cancel' },
+        {
+          text: 'Hapus',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await calendarRepository.clearDay(userId, iso);
+              await loadMonth();
+            } catch (e) {
+              console.warn('Gagal menghapus penanda kalender:', e);
+            }
+          },
+        },
+      ]
     );
   };
 
-  const handleCreateTodo = async (newTodo: {
-    title: string;
-    description?: string;
-    targetDate: string;
-    startTime?: string;
-    endTime?: string;
-    priority: Priority;
-    category: string;
-    colorTheme: PersonalTodoColor;
-    subtasks: PersonalTodoSubtask[];
-  }) => {
-    await todoRepository.create({
-      ...newTodo,
-      userId,
-      isCompleted: false,
-    });
-    loadData();
+  const handleDeleteFromModal = () => {
+    if (!editingDate) return;
+    Alert.alert(
+      'Hapus Penanda',
+      `Warna dan catatan pada ${formatDayMonthYear(editingDate)} akan dihapus.`,
+      [
+        { text: 'Batal', style: 'cancel' },
+        {
+          text: 'Hapus',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await calendarRepository.clearDay(userId, editingDate);
+              closeEditor();
+              await loadMonth();
+            } catch (e) {
+              console.warn('Gagal menghapus penanda:', e);
+            }
+          },
+        },
+      ]
+    );
   };
 
-  // 15 Hourly slots from 07:00 to 21:00
-  const hours = Array.from({ length: 15 }, (_, i) => i + 7);
+  // Logic validasi simpan yang benar
+  const existingMark = editingDate ? marks[editingDate] : undefined;
+  const hasExistingMark = Boolean(existingMark);
+  const noteTrimmed = draftNote.trim();
+  const hasContent = draftColor !== null || noteTrimmed.length > 0;
+  const isModified = hasExistingMark
+    ? draftColor !== existingMark?.color || noteTrimmed !== (existingMark?.note ?? '')
+    : hasContent;
+  const canSave = hasContent && isModified;
 
-  // Distribution by Category
-  const categoryCount = useMemo(() => {
-    const map: Record<string, number> = {};
-    for (const t of todos) {
-      map[t.category] = (map[t.category] || 0) + 1;
+  const saveDay = async () => {
+    if (!editingDate) return;
+    setIsSaving(true);
+    try {
+      const finalColor: PersonalTodoColor = draftColor ?? 'periwinkle';
+      await calendarRepository.setDay(userId, editingDate, {
+        color: finalColor,
+        note: draftNote,
+      });
+      closeEditor();
+      await loadMonth();
+    } catch (e) {
+      console.warn('Gagal menyimpan penanda kalender:', e);
+      setIsSaving(false);
     }
-    return map;
-  }, [todos]);
+  };
+
+  // Ringkasan aktivitas bulanan
+  const daysWithTasks = useMemo(() => {
+    return Object.values(signals).filter((s) => s.hasTodos).length;
+  }, [signals]);
+
+  const daysCompleted = useMemo(() => {
+    return Object.values(signals).filter((s) => s.hasTodos && s.pending === 0).length;
+  }, [signals]);
+
+  const markedDaysCount = useMemo(() => {
+    return Object.keys(marks).length;
+  }, [marks]);
+
+  const monthProgressPercent =
+    daysWithTasks > 0 ? Math.round((daysCompleted / daysWithTasks) * 100) : 0;
 
   return (
     <View style={styles.container}>
-      {/* 1. Pemilih tanggal: strip mingguan + kalender bulanan */}
-      <View style={styles.dateSelector}>
+      {/* 1. Header Bulan & Tahun */}
+      <View style={styles.monthNav}>
         <TouchableOpacity
-          style={styles.dateSelectorButton}
-          onPress={() => setIsDatePickerOpen(true)}
-          accessibilityLabel="Buka kalender"
+          style={styles.navCenter}
+          onPress={() => setIsMonthPickerOpen(true)}
+          accessibilityLabel={`${MONTH_NAMES[month]} ${year}. Ketuk untuk ganti bulan`}
         >
-          <CalendarDays size={15} color={TodoColors.accent} />
-          <Text style={styles.dateSelectorText}>{formatLongDate(selectedDate)}</Text>
-          <ChevronDown size={15} color={TodoColors.accent} />
+          <View style={styles.navTitleRow}>
+            <CalendarDays size={16} color={TodoColors.accent} strokeWidth={2.2} />
+            <Text style={styles.navTitle}>
+              {MONTH_NAMES[month]} {year}
+            </Text>
+          </View>
+          <Text style={styles.navHint}>
+            {isCurrentMonth ? 'Bulan ini · ketuk untuk pilih' : 'Ketuk untuk pilih'}
+          </Text>
         </TouchableOpacity>
       </View>
 
-      <WeekDateStrip
-        selectedDate={selectedDate}
-        onSelectDate={setSelectedDate}
-        datesWithEvents={datesWithEvents}
-      />
-
-      <DatePickerSheet
-        visible={isDatePickerOpen}
-        value={selectedDate}
-        onClose={() => setIsDatePickerOpen(false)}
-        onSelect={setSelectedDate}
-        datesWithContent={datesWithEvents}
-      />
-
-      {/* 2. Events Distribution Bar */}
-      {todos.length > 0 && (
-        <View style={styles.distributionBar}>
-          <Text style={styles.distribTitle}>Distribusi Aktivitas:</Text>
-          <View style={styles.distribChips}>
-            {Object.entries(categoryCount).map(([cat, count]) => (
-              <View key={cat} style={styles.distribChip}>
-                <Text style={styles.distribChipText}>
-                  {cat}: <Text style={{ fontWeight: '800' }}>{count}</Text>
-                </Text>
-              </View>
-            ))}
-          </View>
-        </View>
-      )}
-
-      {/* 3. Conflict Alert Banner if any conflict found */}
-      {conflictingTodoIds.size > 0 && (
-        <View style={styles.conflictAlert}>
-          <AlertTriangle size={18} color="#DC2626" />
-          <Text style={styles.conflictAlertText}>
-            Terdeteksi {conflictingTodoIds.size} jadwal yang saling bentrok pada jam yang sama!
+      {/* 2. Kartu Ringkasan Progres Bulanan: identik dengan progressCard di Tasks */}
+      <View style={styles.progressCard}>
+        <View style={styles.progressTextRow}>
+          <Text style={styles.progressTitle}>Aktivitas Bulan Ini</Text>
+          <Text style={styles.progressValue}>
+            {daysWithTasks > 0
+              ? `${daysCompleted} dari ${daysWithTasks} hari tuntas (${monthProgressPercent}%)`
+              : `${markedDaysCount} tanggal ditandai`}
           </Text>
         </View>
-      )}
+        <View style={styles.progressBarBg}>
+          <View
+            style={[
+              styles.progressBarFill,
+              {
+                width:
+                  daysWithTasks > 0
+                    ? `${monthProgressPercent}%`
+                    : markedDaysCount > 0
+                    ? '100%'
+                    : '0%',
+                backgroundColor:
+                  monthProgressPercent === 100 || (daysWithTasks === 0 && markedDaysCount > 0)
+                    ? '#10B981'
+                    : BrandColors.primary,
+              },
+            ]}
+          />
+        </View>
+      </View>
 
-      {/* 4. Vertical Time-Blocking Timetable */}
+      {/* 3. Petak Tanggal Kalender */}
       {isLoading ? (
-        <View style={styles.loadingContainer}>
+        <View style={styles.centerLoading}>
           <ActivityIndicator size="large" color={BrandColors.primary} />
         </View>
       ) : (
-        <ScrollView style={styles.timetableScroll} contentContainerStyle={styles.timetableContent}>
-          {hours.map((hour) => {
-            const hourStr = hour.toString().padStart(2, '0');
-            const timeLabel = `${hourStr}:00`;
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          <View style={styles.calendarCard}>
+            <View style={styles.weekdayRow}>
+              {WEEKDAY_HEADERS.map((label, index) => (
+                <Text key={`${label}-${index}`} style={styles.weekdayLabel}>
+                  {label}
+                </Text>
+              ))}
+            </View>
 
-            // Filter todos starting in this hour (e.g. 09:xx in 09:00)
-            const hourTodos = todos.filter((t) => {
-              if (!t.startTime) return false;
-              const h = parseInt(t.startTime.split(':')[0], 10);
-              return h === hour;
-            });
+            <View style={styles.grid}>
+              {Array.from({ length: leading }, (_, i) => (
+                <View key={`blank-${i}`} style={styles.cell} />
+              ))}
 
-            return (
-              <View key={hour} style={styles.hourRow}>
-                {/* Time Axis */}
-                <View style={styles.hourAxis}>
-                  <Text style={styles.hourLabel}>{timeLabel}</Text>
-                </View>
+              {cells.map((cell) => {
+                const mark = marks[cell.iso];
+                const signal = signals[cell.iso];
+                const pastel = mark ? BrandColors.pastels[mark.color] : null;
+                const isToday = cell.iso === todayIso;
+                const hasNote = Boolean(mark?.note);
 
-                {/* Event Area */}
-                <View style={styles.slotContent}>
-                  {hourTodos.length === 0 ? (
-                    <View style={styles.emptySlotLine} />
-                  ) : (
-                    hourTodos.map((todo) => {
-                      const themeKey = (todo.colorTheme || 'yellow') as PersonalTodoColor;
-                      const pastel = BrandColors.pastels[themeKey] || BrandColors.pastels.yellow;
-                      const hasConflict = conflictingTodoIds.has(todo.id);
-
-                      return (
-                        <View
-                          key={todo.id}
+                return (
+                  <Pressable
+                    key={cell.iso}
+                    style={styles.cell}
+                    onPress={() => openEditor(cell.iso)}
+                    onLongPress={mark ? () => confirmClear(cell.iso) : undefined}
+                    delayLongPress={450}
+                    accessibilityLabel={`${cell.dayNum} ${MONTH_NAMES[month]}${
+                      hasNote ? ', ada catatan' : ''
+                    }, ketuk untuk menandai${
+                      mark ? ', tekan lama untuk menghapus penanda' : ''
+                    }`}
+                  >
+                    {({ pressed }) => (
+                      <View
+                        style={[
+                          styles.cellBox,
+                          pastel
+                            ? { backgroundColor: pastel.bg, borderColor: pastel.border }
+                            : styles.cellBoxEmpty,
+                          isToday && styles.cellToday,
+                          pressed && styles.cellPressed,
+                        ]}
+                      >
+                        <Text
                           style={[
-                            styles.eventCard,
-                            { backgroundColor: pastel.bg, borderColor: pastel.border },
-                            hasConflict && styles.eventCardConflict,
+                            styles.dayNum,
+                            pastel ? { color: pastel.text } : null,
+                            isToday && styles.dayNumToday,
                           ]}
                         >
-                          {/* Event Header */}
-                          <View style={styles.eventCardHeader}>
-                            <View style={styles.eventTimeBadge}>
-                              <Clock size={11} color="#64748B" />
-                              <Text style={styles.eventTimeText}>
-                                {todo.startTime} - {todo.endTime || 'Selesai'}
-                              </Text>
-                            </View>
+                          {cell.dayNum}
+                        </Text>
 
-                            {hasConflict && (
-                              <View style={styles.conflictBadge}>
-                                <AlertTriangle size={10} color="#DC2626" />
-                                <Text style={styles.conflictBadgeText}>Bentrok</Text>
-                              </View>
-                            )}
+                        <View style={styles.cellFooter}>
+                          {hasNote ? (
+                            <StickyNote size={8} color={pastel?.text ?? TodoColors.muted} />
+                          ) : null}
 
-                            <TouchableOpacity
+                          {signal?.hasTodos ? (
+                            <View
                               style={[
-                                styles.checkSmall,
-                                todo.isCompleted && styles.checkSmallDone,
+                                styles.todoDot,
+                                {
+                                  backgroundColor:
+                                    signal.pending > 0
+                                      ? BrandColors.pastels[signal.color].border
+                                      : '#CBD5E1',
+                                },
                               ]}
-                              onPress={() => handleToggle(todo.id)}
-                            >
-                              {todo.isCompleted && (
-                                <Check size={10} color="#FFFFFF" strokeWidth={3} />
-                              )}
-                            </TouchableOpacity>
-                          </View>
-
-                          <Text
-                            style={[
-                              styles.eventTitle,
-                              todo.isCompleted && styles.eventTitleDone,
-                            ]}
-                            numberOfLines={1}
-                          >
-                            {todo.title}
-                          </Text>
-
-                          {todo.description ? (
-                            <Text style={styles.eventDesc} numberOfLines={1}>
-                              {todo.description}
-                            </Text>
+                            />
                           ) : null}
                         </View>
-                      );
-                    })
-                  )}
-                </View>
-              </View>
-            );
-          })}
+                      </View>
+                    )}
+                  </Pressable>
+                );
+              })}
+            </View>
+          </View>
+
+          {/* Legenda Keterangan */}
+          <View style={styles.legendCard}>
+            <View style={styles.legendRow}>
+              <View
+                style={[styles.legendDot, { backgroundColor: BrandColors.pastels.mint.border }]}
+              />
+              <Text style={styles.legendText}>Tugas aktif</Text>
+            </View>
+            <View style={styles.legendRow}>
+              <View style={[styles.legendDot, { backgroundColor: '#CBD5E1' }]} />
+              <Text style={styles.legendText}>Semua selesai</Text>
+            </View>
+            <View style={styles.legendRow}>
+              <StickyNote size={11} color={TodoColors.muted} />
+              <Text style={styles.legendText}>Catatan</Text>
+            </View>
+            <View style={styles.legendRow}>
+              <View style={styles.legendToday} />
+              <Text style={styles.legendText}>Hari ini</Text>
+            </View>
+          </View>
         </ScrollView>
       )}
 
-      {/* FAB */}
-      <TouchableOpacity
-        style={styles.fab}
-        onPress={() => setIsCreateModalOpen(true)}
-        activeOpacity={0.8}
-      >
-        <Plus size={24} color="#FFFFFF" />
-      </TouchableOpacity>
-
-      {/* Modal */}
-      <CreateTodoModal
-        visible={isCreateModalOpen}
-        targetDate={selectedDate}
-        onClose={() => setIsCreateModalOpen(false)}
-        onSave={handleCreateTodo}
+      {/* Date Picker Modal untuk memilih bulan dan tanggal */}
+      <DatePickerSheet
+        visible={isMonthPickerOpen}
+        value={toIsoDate(new Date(year, month, 1))}
+        onClose={() => setIsMonthPickerOpen(false)}
+        onSelect={(iso) => {
+          const picked = fromIsoDate(iso);
+          setYear(picked.getFullYear());
+          setMonth(picked.getMonth());
+        }}
       />
+
+      {/* 4. Modal Editor Catatan & Warna Tanggal */}
+      <Modal
+        visible={editingDate !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={closeEditor}
+      >
+        <Pressable style={styles.backdrop} onPress={closeEditor}>
+          <Pressable style={styles.sheet} onPress={(e) => e.stopPropagation()}>
+            <View style={styles.sheetHeader}>
+              <Text style={styles.sheetTitle}>
+                {editingDate ? formatDayMonthYear(editingDate) : ''}
+              </Text>
+              <TouchableOpacity
+                onPress={closeEditor}
+                style={styles.closeBtn}
+                accessibilityLabel="Tutup"
+              >
+                <X size={16} color={TodoColors.muted} />
+              </TouchableOpacity>
+            </View>
+
+            {/* Input Catatan */}
+            <TextInput
+              style={styles.noteInput}
+              placeholder="Tulis catatan untuk tanggal ini..."
+              placeholderTextColor={TodoColors.faint}
+              value={draftNote}
+              onChangeText={setDraftNote}
+              multiline
+              textAlignVertical="top"
+            />
+
+            {/* Pilihan warna: bulat dan kecil di bawah teks input */}
+            <View style={styles.colorPickerSection}>
+              <Text style={styles.colorPickerLabel}>Warna:</Text>
+              <View style={styles.colorCirclesRow}>
+                {CALENDAR_COLORS.map((color) => {
+                  const pastel = BrandColors.pastels[color];
+                  const isActive = draftColor === color;
+                  return (
+                    <TouchableOpacity
+                      key={color}
+                      style={[
+                        styles.colorDot,
+                        { backgroundColor: pastel.badge, borderColor: pastel.border },
+                        isActive && styles.colorDotActive,
+                      ]}
+                      onPress={() => handleSelectColor(color)}
+                      accessibilityLabel={COLOR_LABEL[color]}
+                      activeOpacity={0.7}
+                    >
+                      {isActive ? (
+                        <Check size={12} color={pastel.text} strokeWidth={3} />
+                      ) : null}
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+
+            <View style={styles.sheetActions}>
+              {hasExistingMark ? (
+                <TouchableOpacity
+                  style={styles.deleteBtn}
+                  onPress={handleDeleteFromModal}
+                  disabled={isSaving}
+                  accessibilityLabel="Hapus Penanda"
+                >
+                  <Trash2 size={16} color={TodoColors.danger} />
+                  <Text style={styles.deleteBtnText}>Hapus</Text>
+                </TouchableOpacity>
+              ) : null}
+
+              <TouchableOpacity
+                style={[
+                  styles.submitBtn,
+                  (!canSave || isSaving) && styles.submitBtnDisabled,
+                ]}
+                onPress={saveDay}
+                disabled={!canSave || isSaving}
+                accessibilityState={{ disabled: !canSave || isSaving }}
+              >
+                <Text style={styles.submitBtnText}>
+                  {isSaving ? 'Menyimpan...' : 'Simpan'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.sheetHint}>
+              Tekan lama tanggal pada kalender untuk menghapus penanda secara cepat.
+            </Text>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  dateSelector: {
-    paddingHorizontal: 16,
-    paddingTop: 12,
-    paddingBottom: 4,
-  },
-  dateSelectorButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-    alignSelf: 'flex-start',
-    paddingHorizontal: 12,
-    paddingVertical: 9,
-    borderRadius: 10,
-    backgroundColor: TodoColors.accentSoft,
-  },
-  dateSelectorText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: TodoColors.accent,
-  },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
-  distributionBar: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 16,
-    paddingVertical: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  distribTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-  },
-  distribChips: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 6,
-    flex: 1,
-  },
-  distribChip: {
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-  },
-  distribChipText: {
-    fontSize: 10,
-    color: '#475569',
-  },
-  conflictAlert: {
-    backgroundColor: '#FEF2F2',
-    borderWidth: 1,
-    borderColor: '#FCA5A5',
-    marginHorizontal: 16,
-    marginTop: 8,
-    padding: 10,
-    borderRadius: 10,
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  conflictAlertText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#B91C1C',
-    flex: 1,
-  },
-  loadingContainer: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  timetableScroll: {
-    flex: 1,
-  },
-  timetableContent: {
+  monthNav: {
     paddingHorizontal: 16,
     paddingTop: 12,
-    paddingBottom: 90,
+    paddingBottom: 4,
   },
-  hourRow: {
-    flexDirection: 'row',
-    minHeight: 52,
-    marginBottom: 4,
-  },
-  hourAxis: {
-    width: 52,
-    paddingTop: 2,
-  },
-  hourLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#94A3B8',
-  },
-  slotContent: {
-    flex: 1,
-    justifyContent: 'center',
-    borderLeftWidth: 1.5,
-    borderLeftColor: '#E2E8F0',
-    paddingLeft: 10,
-    paddingBottom: 6,
-  },
-  emptySlotLine: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-  },
-  eventCard: {
+  navCenter: {
+    alignItems: 'center',
+    paddingVertical: 10,
     borderRadius: 12,
-    borderWidth: 1.5,
-    padding: 10,
-    marginBottom: 6,
+    backgroundColor: TodoColors.accentSoft,
   },
-  eventCardConflict: {
-    borderLeftWidth: 4,
-    borderLeftColor: '#EF4444',
+  navTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 7,
   },
-  eventCardHeader: {
+  navTitle: {
+    fontSize: 14.5,
+    fontWeight: '800',
+    color: TodoColors.accent,
+  },
+  navHint: {
+    fontSize: 10.5,
+    fontWeight: '500',
+    color: TodoColors.faint,
+    marginTop: 2,
+  },
+  progressCard: {
+    marginHorizontal: 16,
+    marginTop: 8,
+    marginBottom: 8,
+    padding: 14,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  progressTextRow: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    marginBottom: 4,
+    marginBottom: 8,
   },
-  eventTimeBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  eventTimeText: {
-    fontSize: 10,
-    fontWeight: '700',
-    color: '#475569',
-  },
-  conflictBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 3,
-    backgroundColor: '#FEE2E2',
-    paddingHorizontal: 6,
-    paddingVertical: 1,
-    borderRadius: 4,
-  },
-  conflictBadgeText: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: '#DC2626',
-    textTransform: 'uppercase',
-  },
-  checkSmall: {
-    width: 18,
-    height: 18,
-    borderRadius: 5,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-    backgroundColor: '#FFFFFF',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  checkSmallDone: {
-    backgroundColor: '#10B981',
-    borderColor: '#10B981',
-  },
-  eventTitle: {
-    fontSize: 13,
+  progressTitle: {
+    fontSize: 12,
     fontWeight: '700',
     color: '#0F172A',
   },
-  eventTitleDone: {
-    textDecorationLine: 'line-through',
-    color: '#64748B',
-  },
-  eventDesc: {
+  progressValue: {
     fontSize: 11,
+    fontWeight: '600',
     color: '#64748B',
-    marginTop: 2,
   },
-  fab: {
-    position: 'absolute',
-    bottom: 24,
-    right: 20,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
+  progressBarBg: {
+    height: 8,
+    backgroundColor: '#F1F5F9',
+    borderRadius: 4,
+    overflow: 'hidden',
+  },
+  progressBarFill: {
+    height: '100%',
+    borderRadius: 4,
+  },
+  scrollContent: {
+    paddingBottom: 32,
+  },
+  calendarCard: {
+    marginHorizontal: 16,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  weekdayRow: {
+    flexDirection: 'row',
+    marginBottom: 8,
+  },
+  weekdayLabel: {
+    width: `${100 / 7}%`,
+    textAlign: 'center',
+    fontSize: 11,
+    fontWeight: '700',
+    color: TodoColors.muted,
+  },
+  grid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+  },
+  cell: {
+    width: `${100 / 7}%`,
+    aspectRatio: 0.94,
+    padding: 2.5,
+  },
+  cellBox: {
+    flex: 1,
+    borderRadius: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+  },
+  cellBoxEmpty: {
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
+  },
+  cellToday: {
+    borderColor: BrandColors.primary,
+    borderWidth: 2,
+    backgroundColor: TodoColors.accentSoft,
+  },
+  cellPressed: {
+    opacity: 0.65,
+  },
+  dayNum: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: TodoColors.body,
+  },
+  dayNumToday: {
+    color: BrandColors.primary,
+    fontWeight: '800',
+  },
+  cellFooter: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+    marginTop: 2,
+    height: 8,
+  },
+  todoDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  legendCard: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    justifyContent: 'space-between',
+    marginHorizontal: 16,
+    marginTop: 10,
+    padding: 12,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  legendRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 5,
+  },
+  legendDot: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
+  },
+  legendToday: {
+    width: 8,
+    height: 8,
+    borderRadius: 2,
+    borderWidth: 1.5,
+    borderColor: BrandColors.primary,
+  },
+  legendText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: TodoColors.muted,
+  },
+  centerLoading: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  backdrop: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
+    justifyContent: 'center',
+    paddingHorizontal: 16,
+  },
+  sheet: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 18,
+    padding: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  sheetHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginBottom: 14,
+  },
+  closeBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: TodoColors.surfaceMuted,
+  },
+  sheetTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: -0.2,
+    color: TodoColors.title,
+  },
+  noteInput: {
+    minHeight: 88,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: TodoColors.border,
+    padding: 12,
+    fontSize: 13.5,
+    color: TodoColors.title,
+    backgroundColor: TodoColors.surfaceMuted,
+  },
+  colorPickerSection: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginTop: 12,
+    paddingHorizontal: 2,
+  },
+  colorPickerLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: TodoColors.muted,
+  },
+  colorCirclesRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  colorDot: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+  },
+  colorDotActive: {
+    borderWidth: 2,
+    borderColor: TodoColors.accent,
+    transform: [{ scale: 1.15 }],
+  },
+  sheetActions: {
+    flexDirection: 'row',
+    gap: 10,
+    marginTop: 18,
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    height: 46,
+    paddingHorizontal: 16,
+    borderRadius: 12,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  deleteBtnText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: TodoColors.danger,
+  },
+  submitBtn: {
+    flex: 1,
+    height: 46,
+    borderRadius: 12,
     backgroundColor: BrandColors.primary,
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: BrandColors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.35,
-    shadowRadius: 8,
-    elevation: 6,
+  },
+  submitBtnDisabled: {
+    opacity: 0.45,
+  },
+  submitBtnText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+  sheetHint: {
+    marginTop: 12,
+    fontSize: 11,
+    fontWeight: '500',
+    color: TodoColors.faint,
+    textAlign: 'center',
   },
 });
