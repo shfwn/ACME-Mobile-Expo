@@ -1,13 +1,23 @@
 import { sqliteTable, text, integer, real } from 'drizzle-orm/sqlite-core';
 
-// 1. Users Cache
+/**
+ * Akun pengguna yang tersimpan di perangkat.
+ *
+ * Ini sumber kebenaran auth untuk aplikasi: tidak ada server, tidak ada cache —
+ * kredensial dan role benar-benar hidup di SQLite lokal.
+ */
 export const usersTable = sqliteTable('users', {
   id: text('id').primaryKey(),
   email: text('email').notNull().unique(),
   name: text('name').notNull(),
   role: text('role').notNull(), // 'OWNER' | 'ADMIN' | 'MEMBER' | 'VIEWER' | 'MILT'
+  passwordHash: text('password_hash').notNull(),
+  passwordSalt: text('password_salt').notNull(),
   avatarUrl: text('avatar_url'),
   weeklyCapacityHours: real('weekly_capacity_hours').default(40.0),
+  isActive: integer('is_active').notNull().default(1),
+  lastLoginAt: text('last_login_at'),
+  createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
 });
 
@@ -28,8 +38,7 @@ export const personalTodosTable = sqliteTable('personal_todos', {
   reminderAt: text('reminder_at'),
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
-  deletedAt: text('deleted_at'), // Soft-delete for sync
-  syncStatus: text('sync_status').notNull().default('pending_push'), // 'synced' | 'pending_push' | 'pending_delete'
+  deletedAt: text('deleted_at'),
 });
 
 // 3. Personal Notes / Daily Logs (Executive Suite)
@@ -44,7 +53,6 @@ export const personalNotesTable = sqliteTable('personal_notes', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
 // 4. Saved Spreadsheet Links
@@ -57,10 +65,18 @@ export const savedSheetLinksTable = sqliteTable('saved_sheet_links', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
-// 5. Team Tasks (Team Suite)
+// 5. Workspaces (lokal; satu baris bootstrap dibuat saat migrasi)
+export const workspacesTable = sqliteTable('workspaces', {
+  id: text('id').primaryKey(),
+  name: text('name').notNull(),
+  slug: text('slug').notNull().unique(),
+  createdAt: text('created_at').notNull(),
+  updatedAt: text('updated_at').notNull(),
+});
+
+// 6. Team Tasks (Team Suite)
 export const tasksTable = sqliteTable('tasks', {
   id: text('id').primaryKey(),
   projectId: text('project_id').notNull(),
@@ -76,10 +92,9 @@ export const tasksTable = sqliteTable('tasks', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
-// 6. Subtasks
+// 7. Subtasks
 export const subtasksTable = sqliteTable('subtasks', {
   id: text('id').primaryKey(),
   taskId: text('task_id').notNull(),
@@ -90,10 +105,9 @@ export const subtasksTable = sqliteTable('subtasks', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
-// 7. Time Logs (Timer & Pomodoro)
+// 8. Time Logs (Timer & Pomodoro)
 export const timeLogsTable = sqliteTable('time_logs', {
   id: text('id').primaryKey(),
   taskId: text('task_id'),
@@ -107,14 +121,6 @@ export const timeLogsTable = sqliteTable('time_logs', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
-});
-
-// 8. Internal Sync Metadata
-export const syncMetaTable = sqliteTable('sync_meta', {
-  key: text('key').primaryKey(), // e.g. 'last_sync_timestamp'
-  value: text('value').notNull(),
-  updatedAt: text('updated_at').notNull(),
 });
 
 // 9. Projects Table
@@ -127,7 +133,6 @@ export const projectsTable = sqliteTable('projects', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
 // 10. Custom Statuses Table
@@ -141,7 +146,6 @@ export const customStatusesTable = sqliteTable('custom_statuses', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
 // 11. Task Comments Table
@@ -153,7 +157,6 @@ export const taskCommentsTable = sqliteTable('task_comments', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });
 
 // 12. Notifications Table
@@ -168,5 +171,4 @@ export const notificationsTable = sqliteTable('notifications', {
   createdAt: text('created_at').notNull(),
   updatedAt: text('updated_at').notNull(),
   deletedAt: text('deleted_at'),
-  syncStatus: text('sync_status').notNull().default('pending_push'),
 });

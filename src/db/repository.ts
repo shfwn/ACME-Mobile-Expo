@@ -1,7 +1,18 @@
 import { getDb } from './client';
-import { personalTodosTable, personalNotesTable, timeLogsTable } from './schema';
+import {
+  personalTodosTable,
+  personalNotesTable,
+  timeLogsTable,
+  savedSheetLinksTable,
+} from './schema';
 import { eq, and, isNull, desc } from 'drizzle-orm';
-import { PersonalTodo, PersonalNote, PersonalTodoColor, Priority } from '../types/todo.types';
+import {
+  PersonalTodo,
+  PersonalNote,
+  PersonalTodoColor,
+  Priority,
+  SavedSheetLink,
+} from '../types/todo.types';
 import * as Crypto from 'expo-crypto';
 
 function generateId(): string {
@@ -42,7 +53,6 @@ export const todoRepository = {
       reminderAt: r.reminderAt ?? undefined,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
-      syncStatus: r.syncStatus as PersonalTodo['syncStatus'],
     }));
   },
 
@@ -75,11 +85,10 @@ export const todoRepository = {
       reminderAt: r.reminderAt ?? undefined,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
-      syncStatus: r.syncStatus as PersonalTodo['syncStatus'],
     }));
   },
 
-  async create(data: Omit<PersonalTodo, 'id' | 'createdAt' | 'updatedAt' | 'syncStatus'>): Promise<PersonalTodo> {
+  async create(data: Omit<PersonalTodo, 'id' | 'createdAt' | 'updatedAt'>): Promise<PersonalTodo> {
     const db = getDb();
     const now = new Date().toISOString();
     const newId = generateId();
@@ -89,7 +98,6 @@ export const todoRepository = {
       id: newId,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     };
 
     await db.insert(personalTodosTable).values({
@@ -109,7 +117,6 @@ export const todoRepository = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
-      syncStatus: 'pending_push',
     });
 
     return newTodo;
@@ -132,8 +139,7 @@ export const todoRepository = {
       .set({
         isCompleted: nextState,
         updatedAt: now,
-        syncStatus: 'pending_push',
-      })
+        })
       .where(eq(personalTodosTable.id, id));
 
     return nextState === 1;
@@ -145,7 +151,7 @@ export const todoRepository = {
 
     const patch: Record<string, unknown> = {
       updatedAt: now,
-      syncStatus: 'pending_push',
+      // Edit baru membatalkan jadwal backoff sebelumnya
     };
 
     if (updates.title !== undefined) patch.title = updates.title;
@@ -172,8 +178,19 @@ export const todoRepository = {
       .set({
         deletedAt: now,
         updatedAt: now,
-        syncStatus: 'pending_delete',
       })
+      .where(eq(personalTodosTable.id, id));
+  },
+
+  /**
+   * Tetapkan status selesai secara eksplisit. Dipakai saat seluruh subtask
+   * dituntaskan, supaya hasilnya tidak bergantung pada state UI yang mungkin basi.
+   */
+  async setCompleted(id: string, isCompleted: boolean): Promise<void> {
+    const db = getDb();
+    await db
+      .update(personalTodosTable)
+      .set({ isCompleted: isCompleted ? 1 : 0, updatedAt: new Date().toISOString() })
       .where(eq(personalTodosTable.id, id));
   },
 };
@@ -202,11 +219,10 @@ export const notesRepository = {
       audioUrl: r.audioUrl ?? undefined,
       createdAt: r.createdAt,
       updatedAt: r.updatedAt,
-      syncStatus: r.syncStatus as PersonalNote['syncStatus'],
     }));
   },
 
-  async create(data: Omit<PersonalNote, 'id' | 'createdAt' | 'updatedAt' | 'syncStatus'>): Promise<PersonalNote> {
+  async create(data: Omit<PersonalNote, 'id' | 'createdAt' | 'updatedAt'>): Promise<PersonalNote> {
     const db = getDb();
     const now = new Date().toISOString();
     const newId = generateId();
@@ -216,7 +232,6 @@ export const notesRepository = {
       id: newId,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     };
 
     await db.insert(personalNotesTable).values({
@@ -230,10 +245,31 @@ export const notesRepository = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
-      syncStatus: 'pending_push',
     });
 
     return newNote;
+  },
+
+  async update(
+    id: string,
+    updates: {
+      title?: string;
+      contentMarkdown?: string;
+      linkedDate?: string | null;
+      tags?: string[];
+      audioUrl?: string | null;
+    }
+  ): Promise<void> {
+    const db = getDb();
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (updates.title !== undefined) patch.title = updates.title;
+    if (updates.contentMarkdown !== undefined) patch.contentMarkdown = updates.contentMarkdown;
+    if (updates.linkedDate !== undefined) patch.linkedDate = updates.linkedDate;
+    if (updates.tags !== undefined) patch.tagsJson = JSON.stringify(updates.tags);
+    if (updates.audioUrl !== undefined) patch.audioUrl = updates.audioUrl;
+
+    await db.update(personalNotesTable).set(patch).where(eq(personalNotesTable.id, id));
   },
 
   async softDelete(id: string): Promise<void> {
@@ -245,7 +281,6 @@ export const notesRepository = {
       .set({
         deletedAt: now,
         updatedAt: now,
-        syncStatus: 'pending_delete',
       })
       .where(eq(personalNotesTable.id, id));
   },
@@ -274,7 +309,66 @@ export const timeLogRepository = {
       createdAt: now,
       updatedAt: now,
       deletedAt: null,
-      syncStatus: 'pending_push',
     });
+  },
+};
+
+export const sheetLinkRepository = {
+  async getAll(userId: string): Promise<SavedSheetLink[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(savedSheetLinksTable)
+      .where(and(eq(savedSheetLinksTable.userId, userId), isNull(savedSheetLinksTable.deletedAt)))
+      .orderBy(desc(savedSheetLinksTable.createdAt));
+
+    return rows.map((r) => ({
+      id: r.id,
+      userId: r.userId,
+      title: r.title,
+      url: r.url,
+      category: r.category,
+      createdAt: r.createdAt,
+    }));
+  },
+
+  async create(data: {
+    userId: string;
+    title: string;
+    url: string;
+    category?: string;
+  }): Promise<SavedSheetLink> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    const id = generateId();
+
+    await db.insert(savedSheetLinksTable).values({
+      id,
+      userId: data.userId,
+      title: data.title,
+      url: data.url,
+      category: data.category ?? 'Spreadsheet',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+
+    return {
+      id,
+      userId: data.userId,
+      title: data.title,
+      url: data.url,
+      category: data.category ?? 'Spreadsheet',
+      createdAt: now,
+    };
+  },
+
+  async softDelete(id: string): Promise<void> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    await db
+      .update(savedSheetLinksTable)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(eq(savedSheetLinksTable.id, id));
   },
 };

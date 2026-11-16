@@ -1,4 +1,6 @@
-import { Priority } from './auth.types';
+import type { Priority } from './auth.types';
+
+export type { Priority };
 
 export type PersonalTodoColor = 'yellow' | 'pink' | 'mint' | 'periwinkle';
 
@@ -24,7 +26,6 @@ export interface PersonalTodo {
   reminderAt?: string;
   createdAt: string;
   updatedAt?: string;
-  syncStatus?: 'synced' | 'pending_push' | 'pending_delete';
 }
 
 export interface PersonalNote {
@@ -37,7 +38,6 @@ export interface PersonalNote {
   audioUrl?: string; // Mobile audio memo feature
   createdAt: string;
   updatedAt: string;
-  syncStatus?: 'synced' | 'pending_push' | 'pending_delete';
 }
 
 export interface SavedSheetLink {

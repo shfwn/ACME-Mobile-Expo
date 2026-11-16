@@ -18,7 +18,10 @@ import {
   CommentItem,
   NotificationItem,
 } from '../types/team.types';
-import { Priority } from '../types/auth.types';
+
+import { DEFAULT_WEEKLY_CAPACITY, UNKNOWN_ASSIGNEE_ID } from './workload';
+import { LOCAL_WORKSPACE_ID } from './account.repository';
+import type { Priority } from '../types/auth.types';
 import * as Crypto from 'expo-crypto';
 
 function generateId(): string {
@@ -30,9 +33,12 @@ function generateId(): string {
 
 export const teamRepository = {
   /**
-   * Pastikan setidaknya ada satu proyek default dan 4 status standar di SQLite lokal
+   * Proyek konteks default: proyek pertama yang masih hidup. Bila belum ada,
+   * proyek bootstrap `proj-umum` dibuat bersama empat status standarnya.
    */
-  async ensureDefaultProject(workspaceId = 'ws-default'): Promise<{ project: Project; statuses: CustomStatus[] }> {
+  async ensureDefaultProject(
+    workspaceId = LOCAL_WORKSPACE_ID
+  ): Promise<{ project: Project; statuses: CustomStatus[] }> {
     const db = getDb();
     const now = new Date().toISOString();
 
@@ -58,22 +64,20 @@ export const teamRepository = {
       };
     }
 
-    // Buat proyek default
-    const projectId = 'proj-core-acme';
+    const projectId = 'proj-umum';
     await db.insert(projectsTable).values({
       id: projectId,
       workspaceId,
-      name: 'ACME Core Project',
-      description: 'Papan pengembangan terpadu tim ACME Workspace',
+      name: 'Proyek Umum',
+      description: null,
       color: '#38507A',
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     });
 
     // Buat 4 status default
     const defaultStatuses = [
-      { id: 'stat-backlog', name: 'To Do', orderIndex: 0, color: '#94A3B8', isDoneState: 0 },
+      { id: 'stat-todo', name: 'To Do', orderIndex: 0, color: '#94A3B8', isDoneState: 0 },
       { id: 'stat-progress', name: 'In Progress', orderIndex: 1, color: '#3B82F6', isDoneState: 0 },
       { id: 'stat-review', name: 'Review', orderIndex: 2, color: '#F59E0B', isDoneState: 0 },
       { id: 'stat-done', name: 'Done', orderIndex: 3, color: '#10B981', isDoneState: 1 },
@@ -89,7 +93,6 @@ export const teamRepository = {
         isDoneState: s.isDoneState,
         createdAt: now,
         updatedAt: now,
-        syncStatus: 'pending_push',
       });
     }
 
@@ -98,14 +101,156 @@ export const teamRepository = {
       project: {
         id: projectId,
         workspaceId,
-        name: 'ACME Core Project',
-        description: 'Papan pengembangan terpadu tim ACME Workspace',
+        name: 'Proyek Umum',
+        description: undefined,
         color: '#38507A',
         createdAt: now,
         updatedAt: now,
       },
       statuses,
     };
+  },
+
+  async getProjects(): Promise<Project[]> {
+    const db = getDb();
+    const rows = await db
+      .select()
+      .from(projectsTable)
+      .where(isNull(projectsTable.deletedAt))
+      .orderBy(projectsTable.createdAt);
+
+    return rows.map((r) => ({
+      id: r.id,
+      workspaceId: r.workspaceId,
+      name: r.name,
+      description: r.description ?? undefined,
+      color: r.color,
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
+  },
+
+  async createProject(data: {
+    name: string;
+    description?: string;
+    color?: string;
+    workspaceId?: string;
+  }): Promise<Project> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    const id = generateId();
+    const workspaceId = data.workspaceId ?? LOCAL_WORKSPACE_ID;
+
+    await db.insert(projectsTable).values({
+      id,
+      workspaceId,
+      name: data.name,
+      description: data.description ?? null,
+      color: data.color ?? '#3B82F6',
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+
+    return {
+      id,
+      workspaceId,
+      name: data.name,
+      description: data.description,
+      color: data.color ?? '#3B82F6',
+      createdAt: now,
+      updatedAt: now,
+    };
+  },
+
+  async renameProject(projectId: string, name: string): Promise<void> {
+    const db = getDb();
+    await db
+      .update(projectsTable)
+      .set({ name, updatedAt: new Date().toISOString() })
+      .where(eq(projectsTable.id, projectId));
+  },
+
+  async deleteProject(projectId: string): Promise<void> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    await db
+      .update(projectsTable)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(eq(projectsTable.id, projectId));
+  },
+
+  async createStatus(data: {
+    projectId: string;
+    name: string;
+    color?: string;
+    isDoneState?: boolean;
+  }): Promise<CustomStatus> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    const id = generateId();
+    const existing = await this.getStatuses(data.projectId);
+    const orderIndex = existing.length;
+
+    await db.insert(customStatusesTable).values({
+      id,
+      projectId: data.projectId,
+      name: data.name,
+      orderIndex,
+      color: data.color ?? '#94A3B8',
+      isDoneState: data.isDoneState ? 1 : 0,
+      createdAt: now,
+      updatedAt: now,
+      deletedAt: null,
+    });
+
+    return {
+      id,
+      projectId: data.projectId,
+      name: data.name,
+      orderIndex,
+      color: data.color ?? '#94A3B8',
+      isDoneState: data.isDoneState ?? false,
+    };
+  },
+
+  async updateTask(taskId: string, updates: {
+    title?: string;
+    description?: string;
+    priority?: Priority;
+    estimatedHours?: number;
+    dueDate?: string;
+    assigneeId?: string | null;
+  }): Promise<void> {
+    const db = getDb();
+    const patch: Record<string, unknown> = { updatedAt: new Date().toISOString() };
+
+    if (updates.title !== undefined) patch.title = updates.title;
+    if (updates.description !== undefined) patch.description = updates.description;
+    if (updates.priority !== undefined) patch.priority = updates.priority;
+    if (updates.estimatedHours !== undefined) patch.estimatedHours = updates.estimatedHours;
+    if (updates.dueDate !== undefined) patch.dueDate = updates.dueDate;
+    if (updates.assigneeId !== undefined) patch.assigneeId = updates.assigneeId;
+
+    await db.update(tasksTable).set(patch).where(eq(tasksTable.id, taskId));
+  },
+
+  async deleteTask(taskId: string): Promise<void> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    await db
+      .update(tasksTable)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(eq(tasksTable.id, taskId));
+  },
+
+  async deleteSubtask(subtaskId: string): Promise<void> {
+    const db = getDb();
+    const now = new Date().toISOString();
+    await db
+      .update(subtasksTable)
+      .set({ deletedAt: now, updatedAt: now })
+      .where(eq(subtasksTable.id, subtaskId));
   },
 
   async getStatuses(projectId: string): Promise<CustomStatus[]> {
@@ -234,7 +379,6 @@ export const teamRepository = {
       .set({
         statusId: newStatusId,
         updatedAt: now,
-        syncStatus: 'pending_push',
       })
       .where(eq(tasksTable.id, taskId));
   },
@@ -268,7 +412,6 @@ export const teamRepository = {
       orderIndex: 0,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     });
 
     const [created] = await this.populateTasks([
@@ -287,7 +430,6 @@ export const teamRepository = {
         createdAt: now,
         updatedAt: now,
         deletedAt: null,
-        syncStatus: 'pending_push',
       },
     ]);
 
@@ -311,7 +453,6 @@ export const teamRepository = {
       .set({
         isCompleted: nextState,
         updatedAt: now,
-        syncStatus: 'pending_push',
       })
       .where(eq(subtasksTable.id, subtaskId));
 
@@ -332,7 +473,6 @@ export const teamRepository = {
       orderIndex: 0,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     });
 
     return {
@@ -358,7 +498,6 @@ export const teamRepository = {
       content,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     });
 
     return {
@@ -386,7 +525,6 @@ export const teamRepository = {
       endedAt: now,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     });
   },
 
@@ -418,7 +556,6 @@ export const teamRepository = {
       .set({
         isRead: 1,
         updatedAt: now,
-        syncStatus: 'pending_push',
       })
       .where(eq(notificationsTable.id, id));
   },
@@ -431,7 +568,6 @@ export const teamRepository = {
       .set({
         isRead: 1,
         updatedAt: now,
-        syncStatus: 'pending_push',
       })
       .where(eq(notificationsTable.userId, userId));
   },
@@ -457,7 +593,6 @@ export const teamRepository = {
       isRead: 0,
       createdAt: now,
       updatedAt: now,
-      syncStatus: 'pending_push',
     });
 
     return {
@@ -470,5 +605,60 @@ export const teamRepository = {
       isRead: false,
       createdAt: now,
     };
+  },
+
+  /** Semua tugas aktif (belum dihapus) beserta statusnya, untuk hitung beban kerja. */
+  async getWorkloadTasks(): Promise<TaskItem[]> {
+    const db = getDb();
+    const rows = await db.select().from(tasksTable).where(isNull(tasksTable.deletedAt));
+    return this.populateTasks(rows);
+  },
+
+  /**
+   * Daftar anggota tim untuk peta beban kerja, dibaca dari tabel users lokal.
+   * Assignee yang tidak punya baris user digabung jadi satu entri "Anggota lain".
+   */
+  async getWorkloadMembers(
+    currentUser?: { id: string; name: string; weeklyCapacityHours?: number }
+  ): Promise<{ userId: string; name: string; capacity: number }[]> {
+    const db = getDb();
+    const memberMap = new Map<string, { userId: string; name: string; capacity: number }>();
+
+    const cachedUsers = await db.select().from(usersTable);
+    for (const u of cachedUsers) {
+      memberMap.set(u.id, {
+        userId: u.id,
+        name: u.name,
+        capacity: u.weeklyCapacityHours ?? DEFAULT_WEEKLY_CAPACITY,
+      });
+    }
+
+    if (currentUser) {
+      memberMap.set(currentUser.id, {
+        userId: currentUser.id,
+        name: currentUser.name,
+        capacity: currentUser.weeklyCapacityHours ?? DEFAULT_WEEKLY_CAPACITY,
+      });
+    }
+
+    const taskRows = await db
+      .select({ assigneeId: tasksTable.assigneeId })
+      .from(tasksTable)
+      .where(isNull(tasksTable.deletedAt));
+
+    // Assignee tanpa baris user (mis. akun yang sudah dihapus) digabung menjadi
+    // satu entri "Anggota lain"; nama karangan per-id hanya mengotori daftar.
+    const hasUnknownAssignee = taskRows.some(
+      (row) => row.assigneeId && !memberMap.has(row.assigneeId)
+    );
+    if (hasUnknownAssignee) {
+      memberMap.set(UNKNOWN_ASSIGNEE_ID, {
+        userId: UNKNOWN_ASSIGNEE_ID,
+        name: 'Anggota lain',
+        capacity: DEFAULT_WEEKLY_CAPACITY,
+      });
+    }
+
+    return Array.from(memberMap.values());
   },
 };
