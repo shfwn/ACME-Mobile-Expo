@@ -12,15 +12,38 @@ import {
 } from 'react-native';
 import { useAuthStore } from '../store/auth.store';
 import { router } from 'expo-router';
-import { BrandColors, Colors } from '../constants/theme';
-import { Lock, Mail, Fingerprint, ArrowRight, ShieldCheck } from 'lucide-react-native';
+import { BrandColors } from '../constants/theme';
+import { Lock, Mail, User as UserIcon, Fingerprint, ArrowRight, ShieldCheck } from 'lucide-react-native';
+import type { Role } from '../types/auth.types';
+
+type Mode = 'login' | 'register';
+
+const ROLE_OPTIONS: { role: Role; label: string }[] = [
+  { role: 'OWNER', label: 'Owner' },
+  { role: 'ADMIN', label: 'Admin' },
+  { role: 'MEMBER', label: 'Member' },
+  { role: 'VIEWER', label: 'Viewer' },
+];
 
 export default function LoginScreen() {
+  const [mode, setMode] = useState<Mode>('login');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [name, setName] = useState('');
+  const [registerRole, setRegisterRole] = useState<Role>('MEMBER');
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const { loginWithCredentials, loginWithBiometrics, biometricAvailable, isLoading } = useAuthStore();
+  const { loginWithCredentials, register, loginWithBiometrics, biometricAvailable, isLoading } =
+    useAuthStore();
+
+  const goToDashboard = () => {
+    const user = useAuthStore.getState().user;
+    if (user?.role === 'OWNER' || user?.role === 'MILT') {
+      router.replace('/(executive)/todos');
+    } else {
+      router.replace('/(team)/my-tasks');
+    }
+  };
 
   const handleLogin = async () => {
     if (!email.trim() || !password) {
@@ -30,15 +53,30 @@ export default function LoginScreen() {
 
     setErrorMessage(null);
     const res = await loginWithCredentials({ email: email.trim(), password });
-
-    if (res.success && res.user) {
-      if (res.user.role === 'OWNER' || res.user.role === 'MILT') {
-        router.replace('/(executive)/todos');
-      } else {
-        router.replace('/(team)/my-tasks');
-      }
+    if (res.success) {
+      goToDashboard();
     } else {
-      setErrorMessage(res.error || 'Email atau kata sandi tidak sesuai');
+      setErrorMessage(res.error);
+    }
+  };
+
+  const handleRegister = async () => {
+    if (!name.trim() || !email.trim() || !password) {
+      setErrorMessage('Nama, email, dan kata sandi wajib diisi');
+      return;
+    }
+
+    setErrorMessage(null);
+    const res = await register({
+      name: name.trim(),
+      email: email.trim(),
+      password,
+      role: registerRole,
+    });
+    if (res.success) {
+      goToDashboard();
+    } else {
+      setErrorMessage(res.error);
     }
   };
 
@@ -46,21 +84,15 @@ export default function LoginScreen() {
     setErrorMessage(null);
     const success = await loginWithBiometrics();
     if (success) {
-      const user = useAuthStore.getState().user;
-      if (user?.role === 'OWNER' || user?.role === 'MILT') {
-        router.replace('/(executive)/todos');
-      } else {
-        router.replace('/(team)/my-tasks');
-      }
+      goToDashboard();
     } else {
       setErrorMessage('Autentikasi biometrik gagal atau sesi belum tersimpan');
     }
   };
 
-  const fillQuickAccount = (quickEmail: string) => {
-    setEmail(quickEmail);
-    setPassword('password123');
+  const switchMode = () => {
     setErrorMessage(null);
+    setMode(mode === 'login' ? 'register' : 'login');
   };
 
   return (
@@ -69,7 +101,6 @@ export default function LoginScreen() {
       style={styles.container}
     >
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        {/* Header Branding */}
         <View style={styles.header}>
           <View style={styles.logoBadge}>
             <Text style={styles.logoText}>AC</Text>
@@ -78,9 +109,10 @@ export default function LoginScreen() {
           <Text style={styles.subtitle}>Sistem Produktivitas & Penjadwalan Terpadu</Text>
         </View>
 
-        {/* Card Form */}
         <View style={styles.card}>
-          <Text style={styles.formTitle}>Masuk ke Akun Anda</Text>
+          <Text style={styles.formTitle}>
+            {mode === 'login' ? 'Masuk ke Akun Anda' : 'Buat Akun Baru'}
+          </Text>
 
           {errorMessage && (
             <View style={styles.errorBanner}>
@@ -88,7 +120,22 @@ export default function LoginScreen() {
             </View>
           )}
 
-          {/* Email Input */}
+          {mode === 'register' && (
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Nama Lengkap</Text>
+              <View style={styles.inputWrapper}>
+                <UserIcon size={18} color="#64748B" style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Nama Anda"
+                  placeholderTextColor="#94A3B8"
+                  value={name}
+                  onChangeText={setName}
+                />
+              </View>
+            </View>
+          )}
+
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Email Kerja</Text>
             <View style={styles.inputWrapper}>
@@ -105,14 +152,13 @@ export default function LoginScreen() {
             </View>
           </View>
 
-          {/* Password Input */}
           <View style={styles.inputGroup}>
             <Text style={styles.label}>Kata Sandi</Text>
             <View style={styles.inputWrapper}>
               <Lock size={18} color="#64748B" style={styles.inputIcon} />
               <TextInput
                 style={styles.input}
-                placeholder="••••••••"
+                placeholder="Minimal 8 karakter"
                 placeholderTextColor="#94A3B8"
                 secureTextEntry
                 value={password}
@@ -121,10 +167,31 @@ export default function LoginScreen() {
             </View>
           </View>
 
-          {/* Login Button */}
+          {mode === 'register' && (
+            <View style={styles.inputGroup}>
+              <Text style={styles.label}>Peran</Text>
+              <View style={styles.roleRow}>
+                {ROLE_OPTIONS.map((option) => {
+                  const active = registerRole === option.role;
+                  return (
+                    <TouchableOpacity
+                      key={option.role}
+                      style={[styles.roleChip, active && styles.roleChipActive]}
+                      onPress={() => setRegisterRole(option.role)}
+                    >
+                      <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                        {option.label}
+                      </Text>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            </View>
+          )}
+
           <TouchableOpacity
             style={[styles.primaryButton, isLoading && styles.buttonDisabled]}
-            onPress={handleLogin}
+            onPress={mode === 'login' ? handleLogin : handleRegister}
             disabled={isLoading}
             activeOpacity={0.8}
           >
@@ -132,14 +199,15 @@ export default function LoginScreen() {
               <ActivityIndicator color="#FFFFFF" />
             ) : (
               <>
-                <Text style={styles.primaryButtonText}>Masuk ke Workspace</Text>
+                <Text style={styles.primaryButtonText}>
+                  {mode === 'login' ? 'Masuk ke Workspace' : 'Daftar & Masuk'}
+                </Text>
                 <ArrowRight size={18} color="#FFFFFF" />
               </>
             )}
           </TouchableOpacity>
 
-          {/* Biometric Quick Login */}
-          {biometricAvailable && (
+          {mode === 'login' && biometricAvailable && (
             <TouchableOpacity
               style={styles.biometricButton}
               onPress={handleBiometricLogin}
@@ -150,43 +218,16 @@ export default function LoginScreen() {
             </TouchableOpacity>
           )}
 
-          {/* Quick Account Fill (Dev Assist) */}
-          <View style={styles.quickFillSection}>
-            <View style={styles.quickFillDivider}>
-              <View style={styles.dividerLine} />
-              <Text style={styles.dividerText}>Akun Demo Cepat</Text>
-              <View style={styles.dividerLine} />
-            </View>
-
-            <View style={styles.quickFillButtons}>
-              <TouchableOpacity
-                style={styles.quickChip}
-                onPress={() => fillQuickAccount('owner@company.com')}
-              >
-                <Text style={styles.quickChipText}>👑 Owner</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.quickChip}
-                onPress={() => fillQuickAccount('siti@company.com')}
-              >
-                <Text style={styles.quickChipText}>⚡ Admin</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.quickChip}
-                onPress={() => fillQuickAccount('andi@company.com')}
-              >
-                <Text style={styles.quickChipText}>💼 Member</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
+          <TouchableOpacity style={styles.switchButton} onPress={switchMode}>
+            <Text style={styles.switchText}>
+              {mode === 'login' ? 'Belum punya akun? Daftar' : 'Sudah punya akun? Masuk'}
+            </Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Security Footer */}
         <View style={styles.footer}>
           <ShieldCheck size={16} color="#64748B" />
-          <Text style={styles.footerText}>Enkripsi SQLite Lokal & Neon Cloud Sync</Text>
+          <Text style={styles.footerText}>Seluruh data tersimpan di SQLite perangkat ini</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -300,6 +341,31 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: '#0F172A',
   },
+  roleRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+  },
+  roleChip: {
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#F1F5F9',
+  },
+  roleChipActive: {
+    borderColor: BrandColors.primary,
+    backgroundColor: '#E8ECF9',
+  },
+  roleChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#475569',
+  },
+  roleChipTextActive: {
+    color: BrandColors.primary,
+  },
   primaryButton: {
     backgroundColor: BrandColors.primary,
     height: 50,
@@ -340,44 +406,15 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '600',
   },
-  quickFillSection: {
-    marginTop: 24,
-  },
-  quickFillDivider: {
-    flexDirection: 'row',
+  switchButton: {
     alignItems: 'center',
-    marginBottom: 12,
+    marginTop: 18,
+    paddingVertical: 4,
   },
-  dividerLine: {
-    flex: 1,
-    height: 1,
-    backgroundColor: '#E2E8F0',
-  },
-  dividerText: {
-    fontSize: 11,
-    color: '#94A3B8',
-    paddingHorizontal: 10,
+  switchText: {
+    fontSize: 12.5,
     fontWeight: '600',
-    textTransform: 'uppercase',
-  },
-  quickFillButtons: {
-    flexDirection: 'row',
-    gap: 8,
-    justifyContent: 'space-between',
-  },
-  quickChip: {
-    flex: 1,
-    paddingVertical: 8,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 10,
-    alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  quickChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: '#334155',
+    color: BrandColors.primary,
   },
   footer: {
     flexDirection: 'row',

@@ -1,14 +1,56 @@
-import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import React, { useState } from 'react';
+import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
 import { PersonalTodo, PersonalTodoColor } from '../types/todo.types';
-import { BrandColors } from '../constants/theme';
-import { Clock, Check, MoreVertical, CalendarForward, Trash2 } from 'lucide-react-native';
+import {
+  BrandColors,
+  TodoColors,
+  CategoryDotColors,
+  CATEGORY_DOT_FALLBACK,
+} from '../constants/theme';
+import {
+  Clock,
+  Check,
+  MoreVertical,
+  CalendarArrowRight,
+  Trash2,
+  Timer,
+  TriangleAlert,
+  ChevronDown,
+  ChevronUp,
+} from 'lucide-react-native';
+import { useTodoSwipe, type TodoSwipeAction } from './todo-swipe-gesture';
 
 interface TodoCardProps {
   todo: PersonalTodo;
-  onToggle: (id: string) => void;
+  onToggle?: (id: string) => void;
   onRollover?: (todo: PersonalTodo) => void;
   onDelete?: (id: string) => void;
+  /** Mulai sesi Pomodoro untuk to-do ini. */
+  onStartTimer?: (todo: PersonalTodo) => void;
+  /** Swipe kanan = selesai, swipe kiri = snooze (tanggal +1). */
+  onSwipeAction?: (todo: PersonalTodo, action: TodoSwipeAction) => void;
+  /** Dipanggil saat satu subtask dicentang/dibuka. */
+  onToggleSubtask?: (todo: PersonalTodo, subtaskId: string) => Promise<void> | void;
+  /** Dipanggil saat subtask dihapus dari kartu. */
+  onDeleteSubtask?: (todo: PersonalTodo, subtaskId: string) => Promise<void> | void;
+}
+
+/** Huruf/ikon prioritas: L, M, H, dan ikon bahaya untuk URGENT. */
+function PriorityMark({ priority }: { priority: PersonalTodo['priority'] }) {
+  if (priority === 'URGENT') {
+    return (
+      <View style={[styles.priorityMark, styles.priorityMarkDanger]}>
+        <TriangleAlert size={12} color={TodoColors.danger} />
+      </View>
+    );
+  }
+
+  const label = priority === 'LOW' ? 'L' : priority === 'HIGH' ? 'H' : 'M';
+  return (
+    <View style={styles.priorityMark}>
+      <Text style={styles.priorityMarkText}>{label}</Text>
+    </View>
+  );
 }
 
 export const TodoCard: React.FC<TodoCardProps> = ({
@@ -16,131 +58,147 @@ export const TodoCard: React.FC<TodoCardProps> = ({
   onToggle,
   onRollover,
   onDelete,
+  onStartTimer,
+  onSwipeAction,
+  onToggleSubtask,
+  onDeleteSubtask,
 }) => {
-  const [showMenu, setShowMenu] = React.useState(false);
+  const { panHandlers, translateX } = useTodoSwipe(
+    todo,
+    (action) => onSwipeAction?.(todo, action)
+  );
+  const [showMenu, setShowMenu] = useState(false);
+  const [showSubtasks, setShowSubtasks] = useState(false);
 
-  const themeKey = (todo.colorTheme || 'yellow') as PersonalTodoColor;
-  const pastel = BrandColors.pastels[themeKey] || BrandColors.pastels.yellow;
+  const colorKey = (todo.colorTheme || 'periwinkle') as PersonalTodoColor;
+  const colorHex = BrandColors.pastels[colorKey]?.border ?? BrandColors.pastels.periwinkle.border;
+  const categoryDot = CategoryDotColors[todo.category] ?? CATEGORY_DOT_FALLBACK;
 
-  const completedSubtasks = todo.subtasks?.filter((s) => s.isCompleted).length || 0;
-  const totalSubtasks = todo.subtasks?.length || 0;
-
-  const priorityColor =
-    todo.priority === 'URGENT'
-      ? BrandColors.urgent
-      : todo.priority === 'HIGH'
-      ? BrandColors.high
-      : todo.priority === 'LOW'
-      ? BrandColors.low
-      : BrandColors.medium;
+  const subtasks = todo.subtasks ?? [];
+  const completedSubtasks = subtasks.filter((s) => s.isCompleted).length;
+  const totalSubtasks = subtasks.length;
 
   return (
-    <View
+    <Animated.View
+      {...(onSwipeAction ? panHandlers : {})}
       style={[
         styles.card,
-        {
-          backgroundColor: todo.isCompleted ? '#F8FAFC' : pastel.bg,
-          borderColor: todo.isCompleted ? '#E2E8F0' : pastel.border,
-          opacity: todo.isCompleted ? 0.75 : 1,
-        },
+        onSwipeAction ? { transform: [{ translateX }] } : null,
       ]}
     >
-      <View style={styles.mainRow}>
-        {/* Checkbox Button */}
-        <TouchableOpacity
-          style={[
-            styles.checkbox,
-            todo.isCompleted
-              ? styles.checkboxChecked
-              : { borderColor: pastel.border, backgroundColor: '#FFFFFF' },
-          ]}
-          onPress={() => onToggle(todo.id)}
-          activeOpacity={0.7}
-        >
-          {todo.isCompleted && <Check size={14} color="#FFFFFF" strokeWidth={3} />}
-        </TouchableOpacity>
-
-        {/* Content Body */}
+      <TouchableOpacity
+        activeOpacity={0.85}
+        onPress={() => setShowMenu((v) => !v)}
+        style={styles.mainRow}
+        disabled={!onDelete && !onRollover && !onStartTimer}
+      >
         <View style={styles.body}>
           <View style={styles.headerMeta}>
             <View style={styles.badgeRow}>
-              {/* Category */}
-              <View style={[styles.categoryBadge, { backgroundColor: '#FFFFFF' }]}>
-                <Text style={[styles.categoryText, { color: pastel.text }]}>
-                  {todo.category}
-                </Text>
-              </View>
-
-              {/* Priority */}
-              <View style={[styles.priorityBadge, { backgroundColor: priorityColor + '18' }]}>
-                <Text style={[styles.priorityText, { color: priorityColor }]}>
-                  {todo.priority}
-                </Text>
-              </View>
+              <View style={[styles.categoryDot, { backgroundColor: categoryDot }]} />
+              <Text style={styles.categoryText}>{todo.category}</Text>
+              <PriorityMark priority={todo.priority} />
             </View>
 
-            {/* Menu Trigger */}
-            <TouchableOpacity
-              onPress={() => setShowMenu(!showMenu)}
-              style={styles.menuTrigger}
-              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-            >
-              <MoreVertical size={16} color="#64748B" />
-            </TouchableOpacity>
+            <View style={styles.headerRight}>
+              {todo.startTime ? (
+                <View style={styles.timeBlock}>
+                  <Clock size={11} color={TodoColors.muted} />
+                  <Text style={styles.timeText}>
+                    {todo.startTime}
+                    {todo.endTime ? `–${todo.endTime}` : ''}
+                  </Text>
+                </View>
+              ) : null}
+
+              <View style={[styles.colorDot, { backgroundColor: colorHex }]} />
+
+              <TouchableOpacity
+                onPress={() => setShowMenu((v) => !v)}
+                style={styles.menuTrigger}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityLabel="Menu to-do"
+              >
+                <MoreVertical size={16} color={TodoColors.faint} />
+              </TouchableOpacity>
+            </View>
           </View>
 
-          {/* Title */}
-          <Text
-            style={[
-              styles.title,
-              todo.isCompleted && styles.titleCompleted,
-              { color: todo.isCompleted ? '#64748B' : '#0F172A' },
-            ]}
-            numberOfLines={2}
-          >
+          <Text style={[styles.title, todo.isCompleted && styles.titleCompleted]}>
             {todo.title}
           </Text>
 
-          {/* Description */}
           {todo.description ? (
             <Text
-              style={[
-                styles.description,
-                todo.isCompleted && styles.descriptionCompleted,
-              ]}
+              style={[styles.description, todo.isCompleted && styles.descriptionCompleted]}
               numberOfLines={2}
             >
               {todo.description}
             </Text>
           ) : null}
 
-          {/* Footer Info: Time-Blocking & Subtasks */}
-          <View style={styles.footerRow}>
-            {todo.startTime && (
-              <View style={styles.timeBlock}>
-                <Clock size={12} color="#64748B" />
-                <Text style={styles.timeText}>
-                  {todo.startTime}
-                  {todo.endTime ? ` - ${todo.endTime}` : ''}
-                </Text>
-              </View>
-            )}
-
-            {totalSubtasks > 0 && (
-              <View style={styles.subtaskSummary}>
-                <Text style={styles.subtaskText}>
-                  Checklist: {completedSubtasks}/{totalSubtasks}
-                </Text>
-              </View>
-            )}
-          </View>
+          {totalSubtasks > 0 ? (
+            <View style={styles.subtaskSummary}>
+              <Check size={12} color={TodoColors.muted} />
+              <Text style={styles.subtaskSummaryText}>
+                {completedSubtasks}/{totalSubtasks} subtask
+              </Text>
+            </View>
+          ) : null}
         </View>
-      </View>
+      </TouchableOpacity>
 
-      {/* Popover Action Menu */}
-      {showMenu && (
+      {/* Dropdown subtask */}
+      {totalSubtasks > 0 ? (
+        <TouchableOpacity
+          style={styles.subtaskToggle}
+          onPress={() => setShowSubtasks((v) => !v)}
+          activeOpacity={0.7}
+        >
+          <Text style={styles.subtaskToggleText}>
+            {showSubtasks ? 'Sembunyikan subtask' : 'Lihat subtask'}
+          </Text>
+          {showSubtasks ? (
+            <ChevronUp size={14} color={TodoColors.accent} />
+          ) : (
+            <ChevronDown size={14} color={TodoColors.accent} />
+          )}
+        </TouchableOpacity>
+      ) : null}
+
+      {showSubtasks && totalSubtasks > 0 ? (
+        <View style={styles.subtaskList}>
+          {subtasks.map((sub) => (
+            <View key={sub.id} style={styles.subtaskRow}>
+              <TouchableOpacity
+                style={[styles.subtaskCheck, sub.isCompleted && styles.subtaskCheckDone]}
+                onPress={() => onToggleSubtask?.(todo, sub.id)}
+                accessibilityLabel={`Centang ${sub.title}`}
+              >
+                {sub.isCompleted ? (
+                  <Check size={11} color={TodoColors.surface} strokeWidth={3} />
+                ) : null}
+              </TouchableOpacity>
+
+              <Text style={[styles.subtaskText, sub.isCompleted && styles.subtaskTextDone]}>
+                {sub.title}
+              </Text>
+
+              <TouchableOpacity
+                onPress={() => onDeleteSubtask?.(todo, sub.id)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityLabel={`Hapus ${sub.title}`}
+              >
+                <Trash2 size={14} color={TodoColors.faint} />
+              </TouchableOpacity>
+            </View>
+          ))}
+        </View>
+      ) : null}
+
+      {showMenu ? (
         <View style={styles.actionMenu}>
-          {onRollover && !todo.isCompleted && (
+          {onRollover && !todo.isCompleted ? (
             <TouchableOpacity
               style={styles.actionMenuItem}
               onPress={() => {
@@ -148,12 +206,40 @@ export const TodoCard: React.FC<TodoCardProps> = ({
                 onRollover(todo);
               }}
             >
-              <CalendarForward size={14} color={BrandColors.primary} />
-              <Text style={styles.actionMenuText}>Rollover ke Besok</Text>
+              <CalendarArrowRight size={14} color={TodoColors.accent} />
+              <Text style={styles.actionMenuText}>Pindah ke besok</Text>
             </TouchableOpacity>
-          )}
+          ) : null}
 
-          {onDelete && (
+          {onStartTimer ? (
+            <TouchableOpacity
+              style={styles.actionMenuItem}
+              onPress={() => {
+                setShowMenu(false);
+                onStartTimer(todo);
+              }}
+            >
+              <Timer size={14} color={TodoColors.accent} />
+              <Text style={styles.actionMenuText}>Mulai Pomodoro</Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {onToggle ? (
+            <TouchableOpacity
+              style={styles.actionMenuItem}
+              onPress={() => {
+                setShowMenu(false);
+                onToggle(todo.id);
+              }}
+            >
+              <Check size={14} color={TodoColors.accent} />
+              <Text style={styles.actionMenuText}>
+                {todo.isCompleted ? 'Tandai belum selesai' : 'Tandai selesai'}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+
+          {onDelete ? (
             <TouchableOpacity
               style={styles.actionMenuItem}
               onPress={() => {
@@ -161,47 +247,31 @@ export const TodoCard: React.FC<TodoCardProps> = ({
                 onDelete(todo.id);
               }}
             >
-              <Trash2 size={14} color={BrandColors.danger} />
-              <Text style={[styles.actionMenuText, { color: BrandColors.danger }]}>
-                Hapus To-Do
+              <Trash2 size={14} color={TodoColors.danger} />
+              <Text style={[styles.actionMenuText, styles.actionMenuTextDanger]}>
+                Hapus to-do
               </Text>
             </TouchableOpacity>
-          )}
+          ) : null}
         </View>
-      )}
-    </View>
+      ) : null}
+    </Animated.View>
   );
 };
 
 const styles = StyleSheet.create({
   card: {
-    borderRadius: 16,
-    borderWidth: 1.5,
-    padding: 14,
-    marginBottom: 12,
-    shadowColor: '#000000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.03,
-    shadowRadius: 6,
-    elevation: 1,
+    backgroundColor: TodoColors.surface,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: TodoColors.border,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 10,
   },
   mainRow: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 12,
-  },
-  checkbox: {
-    width: 22,
-    height: 22,
-    borderRadius: 6,
-    borderWidth: 1.5,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginTop: 2,
-  },
-  checkboxChecked: {
-    backgroundColor: '#10B981',
-    borderColor: '#10B981',
   },
   body: {
     flex: 1,
@@ -216,94 +286,166 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flexShrink: 1,
   },
-  categoryBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 6,
-    borderWidth: 0.5,
-    borderColor: '#E2E8F0',
+  categoryDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
   categoryText: {
-    fontSize: 10,
-    fontWeight: '700',
+    fontSize: 11,
+    fontWeight: '600',
+    color: TodoColors.muted,
     textTransform: 'uppercase',
-    letterSpacing: 0.3,
+    letterSpacing: 0.5,
   },
-  priorityBadge: {
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
+  priorityMark: {
+    minWidth: 18,
+    height: 18,
+    paddingHorizontal: 4,
+    borderRadius: 5,
+    borderWidth: 1,
+    borderColor: TodoColors.border,
+    backgroundColor: TodoColors.surfaceMuted,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  priorityText: {
-    fontSize: 10,
-    fontWeight: '700',
+  priorityMarkDanger: {
+    borderColor: '#F5C2BC',
+    backgroundColor: TodoColors.dangerSoft,
+  },
+  priorityMarkText: {
+    fontSize: 10.5,
+    fontWeight: '800',
+    color: TodoColors.body,
+    letterSpacing: 0.4,
+  },
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  timeBlock: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 3,
+  },
+  timeText: {
+    fontSize: 11,
+    color: TodoColors.muted,
+    fontWeight: '600',
+  },
+  colorDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
   },
   menuTrigger: {
     padding: 2,
   },
   title: {
-    fontSize: 14,
+    fontSize: 14.5,
     fontWeight: '700',
     lineHeight: 20,
-    marginBottom: 4,
+    color: TodoColors.title,
   },
   titleCompleted: {
+    color: TodoColors.faint,
     textDecorationLine: 'line-through',
   },
   description: {
-    fontSize: 12,
-    color: '#64748B',
-    lineHeight: 16,
-    marginBottom: 6,
+    fontSize: 12.5,
+    color: TodoColors.body,
+    lineHeight: 18,
+    marginTop: 3,
   },
   descriptionCompleted: {
+    color: TodoColors.faint,
     textDecorationLine: 'line-through',
   },
-  footerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    marginTop: 4,
-  },
-  timeBlock: {
+  subtaskSummary: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
+    marginTop: 8,
   },
-  timeText: {
+  subtaskSummaryText: {
     fontSize: 11,
-    color: '#64748B',
     fontWeight: '600',
+    color: TodoColors.muted,
   },
-  subtaskSummary: {
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: 6,
+  subtaskToggle: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    marginTop: 10,
+    paddingTop: 9,
+    borderTopWidth: 1,
+    borderTopColor: TodoColors.border,
+  },
+  subtaskToggleText: {
+    fontSize: 11.5,
+    fontWeight: '700',
+    color: TodoColors.accent,
+  },
+  subtaskList: {
+    marginTop: 6,
+    backgroundColor: TodoColors.surfaceMuted,
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  subtaskRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingVertical: 7,
+  },
+  subtaskCheck: {
+    width: 17,
+    height: 17,
+    borderRadius: 5,
+    borderWidth: 1.5,
+    borderColor: TodoColors.borderStrong,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: TodoColors.surface,
+  },
+  subtaskCheckDone: {
+    backgroundColor: TodoColors.success,
+    borderColor: TodoColors.success,
   },
   subtaskText: {
-    fontSize: 10,
-    color: '#475569',
-    fontWeight: '600',
+    flex: 1,
+    fontSize: 12.5,
+    color: TodoColors.body,
+  },
+  subtaskTextDone: {
+    color: TodoColors.faint,
+    textDecorationLine: 'line-through',
   },
   actionMenu: {
     marginTop: 10,
-    paddingTop: 10,
+    paddingTop: 8,
     borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+    borderTopColor: TodoColors.border,
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'flex-end',
-    gap: 16,
+    gap: 14,
   },
   actionMenuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   actionMenuText: {
     fontSize: 12,
     fontWeight: '600',
-    color: BrandColors.primary,
+    color: TodoColors.accent,
+  },
+  actionMenuTextDanger: {
+    color: TodoColors.danger,
   },
 });

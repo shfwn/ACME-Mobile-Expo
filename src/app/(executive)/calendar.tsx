@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -8,12 +8,14 @@ import {
   StyleSheet,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
+import { useFocusEffect } from 'expo-router';
 import { todoRepository } from '../../db/repository';
 import { PersonalTodo, PersonalTodoColor, Priority, PersonalTodoSubtask } from '../../types/todo.types';
-import { BrandColors } from '../../constants/theme';
+import { BrandColors, TodoColors } from '../../constants/theme';
 import { WeekDateStrip } from '../../components/week-date-strip';
+import { DatePickerSheet, formatLongDate, toIsoDate } from '../../components/date-picker-sheet';
 import { CreateTodoModal } from '../../components/create-todo-modal';
-import { Plus, Clock, AlertTriangle, Check } from 'lucide-react-native';
+import { Plus, Clock, AlertTriangle, Check, CalendarDays, ChevronDown } from 'lucide-react-native';
 
 function timeToMinutes(timeStr?: string): number {
   if (!timeStr) return -1;
@@ -27,10 +29,11 @@ function timeToMinutes(timeStr?: string): number {
 
 export default function ExecutiveCalendarScreen() {
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
-  const todayIso = new Date().toISOString().split('T')[0];
+  const todayIso = toIsoDate(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(todayIso);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState<boolean>(false);
   const [todos, setTodos] = useState<PersonalTodo[]>([]);
   const [allUserTodos, setAllUserTodos] = useState<PersonalTodo[]>([]);
   const [isLoading, setIsLoading] = useState<boolean>(true);
@@ -52,9 +55,11 @@ export default function ExecutiveCalendarScreen() {
     }
   }, [userId, selectedDate]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   // Set of dates with events for dot indicators
   const datesWithEvents = useMemo(() => {
@@ -129,11 +134,31 @@ export default function ExecutiveCalendarScreen() {
 
   return (
     <View style={styles.container}>
-      {/* 1. Horizontal Week Strip */}
+      {/* 1. Pemilih tanggal: strip mingguan + kalender bulanan */}
+      <View style={styles.dateSelector}>
+        <TouchableOpacity
+          style={styles.dateSelectorButton}
+          onPress={() => setIsDatePickerOpen(true)}
+          accessibilityLabel="Buka kalender"
+        >
+          <CalendarDays size={15} color={TodoColors.accent} />
+          <Text style={styles.dateSelectorText}>{formatLongDate(selectedDate)}</Text>
+          <ChevronDown size={15} color={TodoColors.accent} />
+        </TouchableOpacity>
+      </View>
+
       <WeekDateStrip
         selectedDate={selectedDate}
         onSelectDate={setSelectedDate}
         datesWithEvents={datesWithEvents}
+      />
+
+      <DatePickerSheet
+        visible={isDatePickerOpen}
+        value={selectedDate}
+        onClose={() => setIsDatePickerOpen(false)}
+        onSelect={setSelectedDate}
+        datesWithContent={datesWithEvents}
       />
 
       {/* 2. Events Distribution Bar */}
@@ -282,6 +307,26 @@ export default function ExecutiveCalendarScreen() {
 }
 
 const styles = StyleSheet.create({
+  dateSelector: {
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 4,
+  },
+  dateSelectorButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    alignSelf: 'flex-start',
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+    borderRadius: 10,
+    backgroundColor: TodoColors.accentSoft,
+  },
+  dateSelectorText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: TodoColors.accent,
+  },
   container: {
     flex: 1,
     backgroundColor: '#F8FAFC',

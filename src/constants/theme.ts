@@ -55,6 +55,46 @@ export const BrandColors = {
   },
 } as const;
 
+/**
+ * Token khusus halaman to-do.
+ *
+ * Dasar: netral hangat-sedikit (slate) agar teks tidak menyilaukan di layar
+ * terang, dengan satu aksen untuk aksi. Warna kategori HANYA dipakai sebagai
+ * dot pengenal, bukan latar kartu.
+ */
+export const TodoColors = {
+  canvas: '#F6F7F9',
+  surface: '#FFFFFF',
+  surfaceMuted: '#F2F4F7',
+  border: '#E4E7EC',
+  borderStrong: '#D0D5DD',
+
+  title: '#101828',
+  body: '#475467',
+  muted: '#667085',
+  faint: '#98A2B3',
+
+  accent: '#38507A',
+  accentSoft: '#EDF1F8',
+  success: '#127A5B',
+  successSoft: '#E7F5EF',
+  danger: '#B42318',
+  dangerSoft: '#FEF3F2',
+} as const;
+
+/**
+ * Warna pengenal kategori. Dirancang sama-sama gelap (L* ±55) supaya tidak ada
+ * satu pun yang menonjol, dan aman untuk buta warna merah-hijau.
+ */
+export const CategoryDotColors: Readonly<Record<string, string>> = {
+  Kerja: '#3E63A8',
+  Pribadi: '#7A5AA8',
+  Fokus: '#1F7A6B',
+  Penting: '#A8563E',
+};
+
+export const CATEGORY_DOT_FALLBACK = '#667085';
+
 export const Colors = {
   light: {
     text: '#0F172A',

@@ -1,10 +1,9 @@
-import { Tabs } from 'expo-router';
-import { BrandColors } from '../../constants/theme';
+import { router, Tabs } from 'expo-router';
+import { TodoColors } from '../../constants/theme';
+import { AppHeaderTitle } from '../../components/app-header-title';
 import { CheckSquare, Calendar, BookOpen, Table2, LogOut } from 'lucide-react-native';
-import { TouchableOpacity, Alert, View } from 'react-native';
+import { TouchableOpacity, Alert, View, StyleSheet } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
-import { router } from 'expo-router';
-import { SyncIndicator } from '../../components/sync-indicator';
 
 export default function ExecutiveTabsLayout() {
   const logout = useAuthStore((s) => s.logout);
@@ -28,26 +27,28 @@ export default function ExecutiveTabsLayout() {
     <Tabs
       screenOptions={{
         headerShown: true,
-        headerStyle: { backgroundColor: '#FFFFFF' },
-        headerTitleStyle: { fontWeight: '700', fontSize: 16, color: '#0F172A' },
+        // Warna pembeda: header memakai aksen lembut, isi halaman tetap terang.
+        headerStyle: { backgroundColor: TodoColors.accentSoft },
+        headerTitleStyle: { fontWeight: '700', fontSize: 15, color: TodoColors.title },
+        headerTintColor: TodoColors.accent,
         headerShadowVisible: false,
+        headerRightContainerStyle: { paddingRight: 4 },
         headerRight: () => (
-          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginRight: 16 }}>
-            <SyncIndicator />
+          <View style={styles.headerRight}>
             <TouchableOpacity
               onPress={handleLogout}
-              style={{ padding: 4 }}
+              style={styles.headerButton}
               accessibilityLabel="Keluar"
             >
-              <LogOut size={18} color="#64748B" />
+              <LogOut size={17} color={TodoColors.accent} />
             </TouchableOpacity>
           </View>
         ),
-        tabBarActiveTintColor: BrandColors.primary,
-        tabBarInactiveTintColor: '#94A3B8',
+        tabBarActiveTintColor: TodoColors.accent,
+        tabBarInactiveTintColor: TodoColors.faint,
         tabBarStyle: {
-          backgroundColor: '#FFFFFF',
-          borderTopColor: '#E2E8F0',
+          backgroundColor: TodoColors.surface,
+          borderTopColor: TodoColors.border,
           height: 60,
           paddingBottom: 8,
           paddingTop: 6,
@@ -62,7 +63,7 @@ export default function ExecutiveTabsLayout() {
         name="todos"
         options={{
           title: 'To-Do Harian',
-          headerTitle: `To-Do • ${user?.name ?? 'Executive'}`,
+          headerTitle: () => <AppHeaderTitle title="To-Do Harian" userName={user?.name} role={user?.role} />,
           tabBarIcon: ({ color, size }) => <CheckSquare size={size} color={color} />,
         }}
       />
@@ -70,7 +71,7 @@ export default function ExecutiveTabsLayout() {
         name="calendar"
         options={{
           title: 'Jadwal',
-          headerTitle: 'Jadwal & Kalender',
+          headerTitle: () => <AppHeaderTitle title="Jadwal" userName={user?.name} role={user?.role} />,
           tabBarIcon: ({ color, size }) => <Calendar size={size} color={color} />,
         }}
       />
@@ -78,7 +79,7 @@ export default function ExecutiveTabsLayout() {
         name="notes"
         options={{
           title: 'Catatan',
-          headerTitle: 'Catatan Harian',
+          headerTitle: () => <AppHeaderTitle title="Catatan" userName={user?.name} role={user?.role} />,
           tabBarIcon: ({ color, size }) => <BookOpen size={size} color={color} />,
         }}
       />
@@ -86,10 +87,22 @@ export default function ExecutiveTabsLayout() {
         name="sheets"
         options={{
           title: 'Sheets',
-          headerTitle: 'Spreadsheet Hub',
+          headerTitle: () => <AppHeaderTitle title="Spreadsheet" userName={user?.name} role={user?.role} />,
           tabBarIcon: ({ color, size }) => <Table2 size={size} color={color} />,
         }}
       />
     </Tabs>
   );
 }
+
+const styles = StyleSheet.create({
+  headerRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginRight: 12,
+  },
+  headerButton: {
+    padding: 6,
+  },
+});

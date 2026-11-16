@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -9,25 +9,34 @@ import {
   Alert,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
-import { todoRepository } from '../../db/repository';
+import { useFocusEffect } from 'expo-router';
+import { todoRepository, timeLogRepository } from '../../db/repository';
 import { PersonalTodo, PersonalTodoColor, Priority, PersonalTodoSubtask } from '../../types/todo.types';
-import { BrandColors } from '../../constants/theme';
+import { BrandColors, TodoColors } from '../../constants/theme';
 import { TodoCard } from '../../components/todo-card';
-import { CreateTodoModal } from '../../components/create-todo-modal';
+import { CreateTodoModal, defaultTimeBlock } from '../../components/create-todo-modal';
+import { DatePickerSheet, formatLongDate, fromIsoDate, toIsoDate } from '../../components/date-picker-sheet';
+import { PomodoroTimer } from '../../components/pomodoro-timer';
+import { NotificationService } from '../../services/notification.service';
+import { sessionToLoggedMinutes, type PomodoroSession } from '../../db/pomodoro';
+import { teamRepository } from '../../db/team.repository';
+import type { TodoSwipeAction } from '../../components/todo-swipe-gesture';
 import { Plus, Calendar, AlertCircle, ChevronLeft, ChevronRight, CheckCircle2 } from 'lucide-react-native';
 
 export default function ExecutiveTodosScreen() {
   const user = useAuthStore((s) => s.user);
 
-  const todayIso = new Date().toISOString().split('T')[0];
+  const todayIso = toIsoDate(new Date());
   const [selectedDate, setSelectedDate] = useState<string>(todayIso);
   const [todos, setTodos] = useState<PersonalTodo[]>([]);
   const [yesterdayPendingCount, setYesterdayPendingCount] = useState<number>(0);
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [filterTab, setFilterTab] = useState<'all' | 'active' | 'completed'>('all');
   const [isCreateModalOpen, setIsCreateModalOpen] = useState<boolean>(false);
+  const [isDatePickerOpen, setIsDatePickerOpen] = useState<boolean>(false);
+  const [timerFor, setTimerFor] = useState<PersonalTodo | null>(null);
 
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
   const loadTodos = useCallback(async () => {
     setIsLoading(true);
@@ -38,7 +47,7 @@ export default function ExecutiveTodosScreen() {
       // Cek apakah ada tugas tertunda kemarin (rollover candidate)
       const yesterday = new Date();
       yesterday.setDate(yesterday.getDate() - 1);
-      const yesterdayIso = yesterday.toISOString().split('T')[0];
+      const yesterdayIso = toIsoDate(yesterday);
       const yesterdayTodos = await todoRepository.getByDate(userId, yesterdayIso);
       const pendingYesterday = yesterdayTodos.filter((t) => !t.isCompleted).length;
       setYesterdayPendingCount(pendingYesterday);
@@ -49,9 +58,12 @@ export default function ExecutiveTodosScreen() {
     }
   }, [userId, selectedDate]);
 
-  useEffect(() => {
-    loadTodos();
-  }, [loadTodos]);
+  // Muat ulang setiap tab kembali fokus: CRUD dari halaman lain (jadwal, sheets) harus terlihat di sini.
+  useFocusEffect(
+    useCallback(() => {
+      loadTodos();
+    }, [loadTodos])
+  );
 
   const handleToggle = async (id: string) => {
     try {
@@ -62,6 +74,30 @@ export default function ExecutiveTodosScreen() {
     } catch (e) {
       console.warn('Gagal toggle todo:', e);
     }
+  };
+
+  const handleToggleSubtask = async (todo: PersonalTodo, subtaskId: string) => {
+    const current = todo.subtasks ?? [];
+    const next = current.map((s) =>
+      s.id === subtaskId ? { ...s, isCompleted: !s.isCompleted } : s
+    );
+    await todoRepository.update(todo.id, { subtasks: next });
+
+    // To-do dianggap selesai hanya ketika semua subtask sudah dicentang.
+    const allDone = next.length > 0 && next.every((s) => s.isCompleted);
+    if (allDone && !todo.isCompleted) {
+      await todoRepository.setCompleted(todo.id, true);
+    } else if (!allDone && todo.isCompleted) {
+      await todoRepository.setCompleted(todo.id, false);
+    }
+
+    loadTodos();
+  };
+
+  const handleDeleteSubtask = async (todo: PersonalTodo, subtaskId: string) => {
+    const next = (todo.subtasks ?? []).filter((s) => s.id !== subtaskId);
+    await todoRepository.update(todo.id, { subtasks: next });
+    loadTodos();
   };
 
   const handleDelete = (id: string) => {
@@ -79,25 +115,79 @@ export default function ExecutiveTodosScreen() {
   };
 
   const handleRollover = async (todo: PersonalTodo) => {
-    await todoRepository.update(todo.id, { targetDate: todayIso });
-    Alert.alert('Sukses', `Tugas "${todo.title}" telah dipindahkan ke tanggal hari ini.`);
+    const tomorrow = new Date();
+    tomorrow.setDate(tomorrow.getDate() + 1);
+    await todoRepository.update(todo.id, { targetDate: toIsoDate(tomorrow) });
+    Alert.alert('Sukses', `Tugas "${todo.title}" telah dipindahkan ke besok.`);
     loadTodos();
   };
 
   const handleRolloverAllYesterday = async () => {
     const yesterday = new Date();
     yesterday.setDate(yesterday.getDate() - 1);
-    const yesterdayIso = yesterday.toISOString().split('T')[0];
+    const yesterdayIso = toIsoDate(yesterday);
     const yesterdayTodos = await todoRepository.getByDate(userId, yesterdayIso);
     const pending = yesterdayTodos.filter((t) => !t.isCompleted);
 
     for (const t of pending) {
-      await todoRepository.update(t.id, { targetDate: selectedDate });
+      // Tanggal baru saja artinya jam lama sudah lewat: blok waktu digeser ke
+      // jam sekarang sehingga pengingat H-15 menit tetap bisa terjadwal.
+      const block = defaultTimeBlock();
+      await todoRepository.update(t.id, {
+        targetDate: selectedDate,
+        startTime: block.startTime,
+        endTime: block.endTime,
+      });
     }
 
     Alert.alert('Rollover Berhasil', `${pending.length} tugas kemarin telah dipindahkan ke hari ini.`);
     loadTodos();
   };
+
+  const recordPomodoro = useCallback(
+    async (session: PomodoroSession) => {
+      const minutes = sessionToLoggedMinutes(session);
+      if (minutes === null) return;
+
+      try {
+        if (session.taskId) {
+          await teamRepository.addTimeLog(
+            session.taskId,
+            userId,
+            minutes,
+            `Pomodoro ${minutes} menit`
+          );
+        } else {
+          // To-do pribadi tidak punya baris Task; catat ke time_logs lewat
+          // todoId supaya jamnya tetap terhitung di rekap.
+          await timeLogRepository.logDuration(userId, minutes, {
+            todoId: session.todoId,
+            note: `Pomodoro ${minutes} menit`,
+          });
+        }
+      } catch (e) {
+        console.warn('Gagal mencatat sesi Pomodoro:', e);
+      }
+    },
+    [userId]
+  );
+
+  const handleSwipeAction = useCallback(
+    async (todo: PersonalTodo, action: TodoSwipeAction) => {
+      if (action === 'complete') {
+        await todoRepository.toggleComplete(todo.id);
+        setTodos((prev) =>
+          prev.map((t) => (t.id === todo.id ? { ...t, isCompleted: true } : t))
+        );
+        return;
+      }
+
+      const nextDate = await NotificationService.snoozeTodo(todo);
+      setTodos((prev) => prev.filter((t) => t.id !== todo.id));
+      Alert.alert('Ditunda', `"${todo.title}" dipindahkan ke ${nextDate}.`);
+    },
+    []
+  );
 
   const handleCreateTodo = async (newTodo: {
     title: string;
@@ -119,9 +209,9 @@ export default function ExecutiveTodosScreen() {
   };
 
   const shiftDate = (offsetDays: number) => {
-    const current = new Date(selectedDate);
+    const current = fromIsoDate(selectedDate);
     current.setDate(current.getDate() + offsetDays);
-    setSelectedDate(current.toISOString().split('T')[0]);
+    setSelectedDate(toIsoDate(current));
   };
 
   // Filter list
@@ -145,18 +235,16 @@ export default function ExecutiveTodosScreen() {
 
         <TouchableOpacity
           style={styles.dateCenter}
-          onPress={() => setSelectedDate(todayIso)}
+          onPress={() => setIsDatePickerOpen(true)}
+          accessibilityLabel="Pilih tanggal"
         >
-          <Calendar size={16} color={BrandColors.primary} />
-          <Text style={styles.dateLabel}>
-            {selectedDate === todayIso ? 'Hari Ini • ' : ''}
-            {new Date(selectedDate + 'T00:00:00').toLocaleDateString('id-ID', {
-              weekday: 'short',
-              day: 'numeric',
-              month: 'short',
-              year: 'numeric',
-            })}
-          </Text>
+          <Calendar size={15} color={TodoColors.accent} />
+          <View style={styles.dateCenterText}>
+            <Text style={styles.dateLabel}>{formatLongDate(selectedDate)}</Text>
+            <Text style={styles.dateHint}>
+              {selectedDate === todayIso ? 'Hari ini · ketuk untuk ganti' : 'Ketuk untuk ganti'}
+            </Text>
+          </View>
         </TouchableOpacity>
 
         <TouchableOpacity style={styles.navArrow} onPress={() => shiftDate(1)}>
@@ -267,6 +355,10 @@ export default function ExecutiveTodosScreen() {
               onToggle={handleToggle}
               onRollover={handleRollover}
               onDelete={handleDelete}
+              onStartTimer={setTimerFor}
+              onSwipeAction={handleSwipeAction}
+              onToggleSubtask={handleToggleSubtask}
+              onDeleteSubtask={handleDeleteSubtask}
             />
           )}
           contentContainerStyle={styles.listContent}
@@ -290,6 +382,24 @@ export default function ExecutiveTodosScreen() {
         targetDate={selectedDate}
         onClose={() => setIsCreateModalOpen(false)}
         onSave={handleCreateTodo}
+      />
+
+      <DatePickerSheet
+        visible={isDatePickerOpen}
+        value={selectedDate}
+        onClose={() => setIsDatePickerOpen(false)}
+        onSelect={setSelectedDate}
+      />
+
+      <PomodoroTimer
+        visible={timerFor !== null}
+        todoId={timerFor?.id}
+        taskTitle={timerFor?.title}
+        onClose={() => setTimerFor(null)}
+        onSessionEnd={(session) => {
+          recordPomodoro(session);
+          setTimerFor(null);
+        }}
       />
     </View>
   );
@@ -323,6 +433,15 @@ const styles = StyleSheet.create({
     paddingVertical: 6,
     borderRadius: 10,
     backgroundColor: '#EEF2FF',
+  },
+  dateCenterText: {
+    flexDirection: 'column',
+  },
+  dateHint: {
+    fontSize: 10.5,
+    fontWeight: '500',
+    color: TodoColors.faint,
+    marginTop: 1,
   },
   dateLabel: {
     fontSize: 13,

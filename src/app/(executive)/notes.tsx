@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -12,14 +12,17 @@ import {
   ScrollView,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
+import { useFocusEffect } from 'expo-router';
 import { notesRepository } from '../../db/repository';
+import { AudioMemoRecorder } from '../../components/audio-memo-recorder';
+import { toIsoDate } from '../../components/date-picker-sheet';
 import { PersonalNote } from '../../types/todo.types';
 import { BrandColors } from '../../constants/theme';
-import { Search, Plus, X, Calendar, Tag, Trash2, BookOpen, FileText } from 'lucide-react-native';
+import { Search, Plus, X, Calendar, Tag, Trash2, BookOpen } from 'lucide-react-native';
 
 export default function ExecutiveNotesScreen() {
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
   const [notes, setNotes] = useState<PersonalNote[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
@@ -32,7 +35,10 @@ export default function ExecutiveNotesScreen() {
   const [newContent, setNewContent] = useState('');
   const [newTagInput, setNewTagInput] = useState('');
   const [newTags, setNewTags] = useState<string[]>([]);
+  const [audioUri, setAudioUri] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  /** null = form membuat catatan baru; string = id catatan yang sedang diedit. */
+  const [editingNoteId, setEditingNoteId] = useState<string | null>(null);
 
   const loadNotes = useCallback(async () => {
     setIsLoading(true);
@@ -46,9 +52,11 @@ export default function ExecutiveNotesScreen() {
     }
   }, [userId]);
 
-  useEffect(() => {
-    loadNotes();
-  }, [loadNotes]);
+  useFocusEffect(
+    useCallback(() => {
+      loadNotes();
+    }, [loadNotes])
+  );
 
   const allAvailableTags = useMemo(() => {
     const set = new Set<string>();
@@ -87,20 +95,32 @@ export default function ExecutiveNotesScreen() {
   const handleCreateNote = async () => {
     if (!newTitle.trim()) return;
     setIsSubmitting(true);
-    const todayIso = new Date().toISOString().split('T')[0];
+    const todayIso = toIsoDate(new Date());
 
     try {
-      await notesRepository.create({
-        userId,
-        title: newTitle.trim(),
-        contentMarkdown: newContent.trim(),
-        linkedDate: todayIso,
-        tags: newTags,
-      });
+      if (editingNoteId) {
+        await notesRepository.update(editingNoteId, {
+          title: newTitle.trim(),
+          contentMarkdown: newContent.trim(),
+          tags: newTags,
+          audioUrl: audioUri,
+        });
+      } else {
+        await notesRepository.create({
+          userId,
+          title: newTitle.trim(),
+          contentMarkdown: newContent.trim(),
+          linkedDate: todayIso,
+          tags: newTags,
+          audioUrl: audioUri ?? undefined,
+        });
+      }
 
       setNewTitle('');
       setNewContent('');
       setNewTags([]);
+      setAudioUri(null);
+      setEditingNoteId(null);
       setIsModalOpen(false);
       loadNotes();
     } catch (e) {
@@ -108,6 +128,29 @@ export default function ExecutiveNotesScreen() {
     } finally {
       setIsSubmitting(false);
     }
+  };
+
+  const handleOpenCreate = () => {
+    setEditingNoteId(null);
+    setNewTitle('');
+    setNewContent('');
+    setNewTags([]);
+    setAudioUri(null);
+    setIsModalOpen(true);
+  };
+
+  const handleOpenEdit = (note: PersonalNote) => {
+    setEditingNoteId(note.id);
+    setNewTitle(note.title);
+    setNewContent(note.contentMarkdown);
+    setNewTags(note.tags);
+    setAudioUri(note.audioUrl ?? null);
+    setIsModalOpen(true);
+  };
+
+  const handleCloseModal = () => {
+    setIsModalOpen(false);
+    setEditingNoteId(null);
   };
 
   const handleDelete = (id: string) => {
@@ -185,7 +228,7 @@ export default function ExecutiveNotesScreen() {
           <Text style={styles.emptySubtitle}>
             Catat ringkasan meeting, ide strategis, atau logbook kerja harian di sini.
           </Text>
-          <TouchableOpacity style={styles.emptyAddBtn} onPress={() => setIsModalOpen(true)}>
+          <TouchableOpacity style={styles.emptyAddBtn} onPress={handleOpenCreate}>
             <Plus size={16} color="#FFFFFF" />
             <Text style={styles.emptyAddBtnText}>Buat Catatan Baru</Text>
           </TouchableOpacity>
@@ -195,7 +238,12 @@ export default function ExecutiveNotesScreen() {
           data={filteredNotes}
           keyExtractor={(item) => item.id}
           renderItem={({ item }) => (
-            <View style={styles.noteCard}>
+            <TouchableOpacity
+              style={styles.noteCard}
+              activeOpacity={0.8}
+              onPress={() => handleOpenEdit(item)}
+              accessibilityLabel={`Edit catatan ${item.title}`}
+            >
               <View style={styles.noteCardHeader}>
                 <View style={styles.noteDateRow}>
                   <Calendar size={12} color="#64748B" />
@@ -223,7 +271,7 @@ export default function ExecutiveNotesScreen() {
                   ))}
                 </View>
               )}
-            </View>
+            </TouchableOpacity>
           )}
           contentContainerStyle={styles.listContent}
           showsVerticalScrollIndicator={false}
@@ -231,17 +279,19 @@ export default function ExecutiveNotesScreen() {
       )}
 
       {/* FAB */}
-      <TouchableOpacity style={styles.fab} onPress={() => setIsModalOpen(true)} activeOpacity={0.8}>
+      <TouchableOpacity style={styles.fab} onPress={handleOpenCreate} activeOpacity={0.8}>
         <Plus size={24} color="#FFFFFF" />
       </TouchableOpacity>
 
       {/* Create Note Modal */}
-      <Modal visible={isModalOpen} animationType="slide" transparent onRequestClose={() => setIsModalOpen(false)}>
+      <Modal visible={isModalOpen} animationType="slide" transparent onRequestClose={handleCloseModal}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalContent}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Catatan Harian Baru</Text>
-              <TouchableOpacity onPress={() => setIsModalOpen(false)}>
+              <Text style={styles.modalTitle}>
+                {editingNoteId ? 'Edit Catatan' : 'Catatan Harian Baru'}
+              </Text>
+              <TouchableOpacity onPress={handleCloseModal}>
                 <X size={20} color="#64748B" />
               </TouchableOpacity>
             </View>
@@ -302,13 +352,19 @@ export default function ExecutiveNotesScreen() {
               </View>
             </ScrollView>
 
+            <View style={styles.memoSection}>
+              <AudioMemoRecorder value={audioUri} onChange={setAudioUri} />
+            </View>
+
             <View style={styles.modalFooter}>
               <TouchableOpacity
                 style={[styles.saveBtn, (!newTitle.trim() || isSubmitting) && styles.saveBtnDisabled]}
                 onPress={handleCreateNote}
                 disabled={!newTitle.trim() || isSubmitting}
               >
-                <Text style={styles.saveBtnText}>{isSubmitting ? 'Menyimpan...' : 'Simpan Catatan'}</Text>
+                <Text style={styles.saveBtnText}>
+                  {isSubmitting ? 'Menyimpan...' : editingNoteId ? 'Simpan Perubahan' : 'Simpan Catatan'}
+                </Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -575,6 +631,10 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#334155',
+  },
+  memoSection: {
+    paddingHorizontal: 16,
+    paddingBottom: 8,
   },
   modalFooter: {
     padding: 20,

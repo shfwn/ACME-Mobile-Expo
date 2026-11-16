@@ -1,6 +1,7 @@
 import React from 'react';
 import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { BrandColors } from '../constants/theme';
+import { toIsoDate } from './date-picker-sheet';
 import { ChevronLeft, ChevronRight } from 'lucide-react-native';
 
 interface WeekDateStripProps {
@@ -24,7 +25,7 @@ export const WeekDateStrip: React.FC<WeekDateStripProps> = ({
   const days = Array.from({ length: 7 }, (_, i) => {
     const d = new Date(monday);
     d.setDate(monday.getDate() + i);
-    const iso = d.toISOString().split('T')[0];
+    const iso = toIsoDate(d);
     const dayNum = d.getDate();
     const dayNames = ['Sen', 'Sel', 'Rab', 'Kam', 'Jum', 'Sab', 'Min'];
     return {
@@ -37,7 +38,7 @@ export const WeekDateStrip: React.FC<WeekDateStripProps> = ({
   const shiftWeek = (offset: number) => {
     const next = new Date(curr);
     next.setDate(curr.getDate() + offset * 7);
-    onSelectDate(next.toISOString().split('T')[0]);
+    onSelectDate(toIsoDate(next));
   };
 
   const monthYearLabel = curr.toLocaleDateString('id-ID', {

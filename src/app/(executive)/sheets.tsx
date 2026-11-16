@@ -1,10 +1,9 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
   ScrollView,
   TouchableOpacity,
-  ActivityIndicator,
   StyleSheet,
   Alert,
   Modal,
@@ -12,11 +11,13 @@ import {
   Platform,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
-import { todoRepository } from '../../db/repository';
+import { useFocusEffect } from 'expo-router';
+import { todoRepository, sheetLinkRepository } from '../../db/repository';
 import { PersonalTodo } from '../../types/todo.types';
 import { BrandColors } from '../../constants/theme';
+import { toIsoDate } from '../../components/date-picker-sheet';
 import * as Sharing from 'expo-sharing';
-import * as FileSystem from 'expo-file-system';
+import { File, Paths } from 'expo-file-system';
 import * as XLSX from 'xlsx';
 import * as WebBrowser from 'expo-web-browser';
 import {
@@ -40,46 +41,35 @@ interface SavedLink {
 
 export default function ExecutiveSheetsScreen() {
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
   const [todos, setTodos] = useState<PersonalTodo[]>([]);
-  const [isLoading, setIsLoading] = useState(true);
   const [isExporting, setIsExporting] = useState(false);
 
   // Link Modal
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [linkTitle, setLinkTitle] = useState('');
   const [linkUrl, setLinkUrl] = useState('');
-  const [savedLinks, setSavedLinks] = useState<SavedLink[]>([
-    {
-      id: 'link-1',
-      title: 'Laporan Rekap Kinerja Q4 (Google Sheets)',
-      url: 'https://docs.google.com/spreadsheets',
-      category: 'Keuangan & KPI',
-    },
-    {
-      id: 'link-2',
-      title: 'Database Roadmap Produk 2026',
-      url: 'https://docs.google.com/spreadsheets',
-      category: 'Produk',
-    },
-  ]);
+  const [savedLinks, setSavedLinks] = useState<SavedLink[]>([]);
 
   const loadData = useCallback(async () => {
-    setIsLoading(true);
     try {
-      const allTodos = await todoRepository.getAllByUser(userId);
+      const [allTodos, links] = await Promise.all([
+        todoRepository.getAllByUser(userId),
+        sheetLinkRepository.getAll(userId),
+      ]);
       setTodos(allTodos);
+      setSavedLinks(links);
     } catch (e) {
       console.warn('Gagal memuat rekap:', e);
-    } finally {
-      setIsLoading(false);
     }
   }, [userId]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   // Kalkulasi statistik kerja
   const totalTasks = todos.length;
@@ -132,7 +122,7 @@ export default function ExecutiveSheetsScreen() {
       const wb = XLSX.utils.book_new();
       XLSX.utils.book_append_sheet(wb, ws, 'Rekap Aktivitas');
 
-      const fileName = `Rekap_ACME_${new Date().toISOString().split('T')[0]}.${format}`;
+      const fileName = `Rekap_ACME_${toIsoDate(new Date())}.${format}`;
 
       if (Platform.OS === 'web') {
         XLSX.writeFile(wb, fileName);
@@ -143,11 +133,11 @@ export default function ExecutiveSheetsScreen() {
           type: 'base64',
           bookType: format === 'xlsx' ? 'xlsx' : 'csv',
         });
-        const fileUri = `${FileSystem.cacheDirectory}${fileName}`;
-
-        await FileSystem.writeAsStringAsync(fileUri, wbout, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
+        // SDK 54+: `FileSystem.cacheDirectory` sudah dihapus. Pakai File + Paths.
+        const file = new File(Paths.cache, fileName);
+        file.create({ overwrite: true });
+        await file.write(wbout, { encoding: 'base64' });
+        const fileUri = file.uri;
 
         const isAvailable = await Sharing.isAvailableAsync();
         if (isAvailable) {
@@ -179,18 +169,43 @@ export default function ExecutiveSheetsScreen() {
     }
   };
 
-  const handleAddLink = () => {
+  const handleAddLink = async () => {
     if (!linkTitle.trim() || !linkUrl.trim()) return;
-    const newL: SavedLink = {
-      id: 'link-' + Date.now().toString(36),
-      title: linkTitle.trim(),
-      url: linkUrl.trim().startsWith('http') ? linkUrl.trim() : 'https://' + linkUrl.trim(),
-      category: 'Spreadsheet',
-    };
-    setSavedLinks([...savedLinks, newL]);
-    setLinkTitle('');
-    setLinkUrl('');
-    setIsLinkModalOpen(false);
+    const normalizedUrl = linkUrl.trim().startsWith('http')
+      ? linkUrl.trim()
+      : `https://${linkUrl.trim()}`;
+
+    try {
+      const created = await sheetLinkRepository.create({
+        userId,
+        title: linkTitle.trim(),
+        url: normalizedUrl,
+      });
+      setSavedLinks((prev) => [created, ...prev]);
+      setLinkTitle('');
+      setLinkUrl('');
+      setIsLinkModalOpen(false);
+    } catch (e) {
+      Alert.alert('Gagal', e instanceof Error ? e.message : 'Link tidak dapat disimpan');
+    }
+  };
+
+  const handleDeleteLink = (link: SavedLink) => {
+    Alert.alert('Hapus Tautan', `Hapus tautan "${link.title}"?`, [
+      { text: 'Batal', style: 'cancel' },
+      {
+        text: 'Hapus',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await sheetLinkRepository.softDelete(link.id);
+            setSavedLinks((prev) => prev.filter((l) => l.id !== link.id));
+          } catch (e) {
+            Alert.alert('Gagal', e instanceof Error ? e.message : 'Tautan tidak dapat dihapus');
+          }
+        },
+      },
+    ]);
   };
 
   return (
@@ -300,6 +315,13 @@ export default function ExecutiveSheetsScreen() {
             </View>
           </View>
           <ExternalLink size={16} color="#94A3B8" />
+          <TouchableOpacity
+            onPress={() => handleDeleteLink(link)}
+            hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            accessibilityLabel={`Hapus tautan ${link.title}`}
+          >
+            <X size={16} color="#EF4444" />
+          </TouchableOpacity>
         </TouchableOpacity>
       ))}
 
@@ -537,6 +559,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     marginBottom: 8,
+    gap: 12,
   },
   linkLeft: {
     flexDirection: 'row',
