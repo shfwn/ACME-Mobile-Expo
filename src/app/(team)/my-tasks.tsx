@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,51 +9,31 @@ import {
   ScrollView,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
+import { useFocusEffect } from 'expo-router';
 import { teamRepository } from '../../db/team.repository';
 import { TaskItem, CustomStatus } from '../../types/team.types';
 import { BrandColors } from '../../constants/theme';
 import { TaskDetailModal } from '../../components/task-detail-modal';
-import { CheckSquare, Calendar, Clock, Check, Plus, Inbox, Filter } from 'lucide-react-native';
+import { CheckSquare, Calendar, Clock, Check, Inbox } from 'lucide-react-native';
 
 export default function MyTasksScreen() {
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
   const [tasks, setTasks] = useState<TaskItem[]>([]);
   const [statuses, setStatuses] = useState<CustomStatus[]>([]);
-  const [projectId, setProjectId] = useState<string>('');
   const [selectedStatusFilter, setSelectedStatusFilter] = useState<string>('all');
-  const [selectedPriorityFilter, setSelectedPriorityFilter] = useState<string>('all');
+  const [selectedPriorityFilter] = useState<string>('all');
   const [isLoading, setIsLoading] = useState<boolean>(true);
   const [activeTaskDetail, setActiveTaskDetail] = useState<TaskItem | null>(null);
 
   const loadData = useCallback(async () => {
     setIsLoading(true);
     try {
-      const { project, statuses: defaultStatuses } = await teamRepository.ensureDefaultProject();
-      setProjectId(project.id);
+      const { statuses: defaultStatuses } = await teamRepository.ensureDefaultProject();
       setStatuses(defaultStatuses);
 
-      let myTasks = await teamRepository.getMyTasks(userId);
-
-      // Onboarding seed jika user tim baru pertama kali membuka layar
-      if (myTasks.length === 0) {
-        const seedTask = await teamRepository.createTask({
-          projectId: project.id,
-          statusId: defaultStatuses[0].id,
-          creatorId: 'u-milt',
-          assigneeId: userId,
-          title: 'Implementasi Modul Mobile ACME',
-          description: 'Selesaikan integrasi SQLite lokal dan halaman antarmuka tim.',
-          priority: 'HIGH',
-          estimatedHours: 4,
-          dueDate: new Date().toISOString().split('T')[0],
-        });
-        await teamRepository.addSubtask(seedTask.id, 'Verifikasi skema SQLite');
-        await teamRepository.addSubtask(seedTask.id, 'Test status switching');
-        myTasks = await teamRepository.getMyTasks(userId);
-      }
-
+      const myTasks = await teamRepository.getMyTasks(userId);
       setTasks(myTasks);
     } catch (e) {
       console.warn('Gagal memuat tugas saya:', e);
@@ -62,9 +42,11 @@ export default function MyTasksScreen() {
     }
   }, [userId]);
 
-  useEffect(() => {
-    loadData();
-  }, [loadData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadData();
+    }, [loadData])
+  );
 
   const filteredTasks = useMemo(() => {
     return tasks.filter((t) => {

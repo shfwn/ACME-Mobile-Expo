@@ -10,7 +10,7 @@ import {
   KeyboardAvoidingView,
   Platform,
 } from 'react-native';
-import { TaskItem, CustomStatus, SubtaskItem, CommentItem } from '../types/team.types';
+import { TaskItem, CustomStatus } from '../types/team.types';
 import { BrandColors } from '../constants/theme';
 import { teamRepository } from '../db/team.repository';
 import { X, Check, Plus, MessageSquare, Clock, Calendar, CheckSquare } from 'lucide-react-native';
@@ -24,6 +24,13 @@ interface TaskDetailModalProps {
   onTaskUpdated: () => void;
 }
 
+/**
+ * Isi sheet dipisah dari komponen pembungkus supaya seluruh hook hidup di
+ * komponen yang `task`-nya tidak pernah null. State form (subtask, komentar,
+ * log waktu) jadi tidak ikut ter-reset saat modal ditutup lalu dibuka.
+ */
+type TaskDetailSheetProps = Omit<TaskDetailModalProps, 'visible' | 'task'> & { task: TaskItem };
+
 export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   visible,
   task,
@@ -31,11 +38,31 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
   currentUserId,
   onClose,
   onTaskUpdated,
-}) => {
-  if (!task) return null;
+}) => (
+  <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
+    {task ? (
+      <TaskDetailSheet
+        task={task}
+        statuses={statuses}
+        currentUserId={currentUserId}
+        onClose={onClose}
+        onTaskUpdated={onTaskUpdated}
+      />
+    ) : null}
+  </Modal>
+);
 
+const TaskDetailSheet: React.FC<TaskDetailSheetProps> = ({
+  task,
+  statuses,
+  currentUserId,
+  onClose,
+  onTaskUpdated,
+}) => {
   const [newSubtaskTitle, setNewSubtaskTitle] = useState('');
   const [newCommentText, setNewCommentText] = useState('');
+  const [customMinutes, setCustomMinutes] = useState('');
+  const [timeLogNote, setTimeLogNote] = useState('');
   const [activeTab, setActiveTab] = useState<'details' | 'comments'>('details');
 
   const priorityColor =
@@ -76,15 +103,28 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
     onTaskUpdated();
   };
 
+  const handleCustomLogTime = async () => {
+    const minutes = Number.parseInt(customMinutes, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) return;
+    await teamRepository.addTimeLog(
+      task.id,
+      currentUserId,
+      minutes,
+      timeLogNote.trim() || `Log manual ${minutes} menit`
+    );
+    setCustomMinutes('');
+    setTimeLogNote('');
+    onTaskUpdated();
+  };
+
   const completedSubtasks = task.subtasks.filter((s) => s.isCompleted).length;
   const totalSubtasks = task.subtasks.length;
 
   return (
-    <Modal visible={visible} animationType="slide" transparent onRequestClose={onClose}>
-      <KeyboardAvoidingView
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        style={styles.backdrop}
-      >
+    <KeyboardAvoidingView
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      style={styles.backdrop}
+    >
         <View style={styles.sheetContainer}>
           {/* Header */}
           <View style={styles.header}>
@@ -230,6 +270,28 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
                       <Text style={styles.timePillText}>+1 Jam</Text>
                     </TouchableOpacity>
                   </View>
+
+                  <View style={styles.customLogRow}>
+                    <TextInput
+                      style={styles.customLogInput}
+                      placeholder="Menit"
+                      placeholderTextColor="#94A3B8"
+                      keyboardType="number-pad"
+                      value={customMinutes}
+                      onChangeText={setCustomMinutes}
+                    />
+                    <TextInput
+                      style={styles.customLogNote}
+                      placeholder="Catatan (opsional)"
+                      placeholderTextColor="#94A3B8"
+                      value={timeLogNote}
+                      onChangeText={setTimeLogNote}
+                    />
+                    <TouchableOpacity style={styles.customLogBtn} onPress={handleCustomLogTime}>
+                      <Plus size={14} color="#FFFFFF" />
+                      <Text style={styles.customLogBtnText}>Catat</Text>
+                    </TouchableOpacity>
+                  </View>
                 </View>
               </View>
             ) : (
@@ -277,8 +339,7 @@ export const TaskDetailModal: React.FC<TaskDetailModalProps> = ({
             )}
           </ScrollView>
         </View>
-      </KeyboardAvoidingView>
-    </Modal>
+    </KeyboardAvoidingView>
   );
 };
 
@@ -513,6 +574,46 @@ const styles = StyleSheet.create({
   },
   commentsContent: {
     paddingBottom: 40,
+  },
+  customLogRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 12,
+  },
+  customLogInput: {
+    width: 72,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0F172A',
+  },
+  customLogNote: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 10,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    fontSize: 13,
+    color: '#0F172A',
+  },
+  customLogBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: BrandColors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 9,
+  },
+  customLogBtnText: {
+    color: '#FFFFFF',
+    fontSize: 12,
+    fontWeight: '700',
   },
   emptyComments: {
     paddingVertical: 24,

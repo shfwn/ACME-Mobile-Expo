@@ -1,10 +1,8 @@
-import { Tabs } from 'expo-router';
+import { router, Tabs } from 'expo-router';
 import { BrandColors } from '../../constants/theme';
-import { CheckSquare, LayoutDashboard, Bell, LogOut } from 'lucide-react-native';
+import { CheckSquare, LayoutDashboard, Bell, LogOut, Users2 } from 'lucide-react-native';
 import { TouchableOpacity, Alert, View } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
-import { router } from 'expo-router';
-import { SyncIndicator } from '../../components/sync-indicator';
 
 export default function TeamTabsLayout() {
   const logout = useAuthStore((s) => s.logout);
@@ -33,7 +31,6 @@ export default function TeamTabsLayout() {
         headerShadowVisible: false,
         headerRight: () => (
           <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10, marginRight: 16 }}>
-            <SyncIndicator />
             <TouchableOpacity
               onPress={handleLogout}
               style={{ padding: 4 }}
@@ -72,6 +69,14 @@ export default function TeamTabsLayout() {
           title: 'Proyek',
           headerTitle: 'Papan Proyek Tim',
           tabBarIcon: ({ color, size }) => <LayoutDashboard size={size} color={color} />,
+        }}
+      />
+      <Tabs.Screen
+        name="workload"
+        options={{
+          title: 'Beban Kerja',
+          headerTitle: 'Peta Kapasitas Tim',
+          tabBarIcon: ({ color, size }) => <Users2 size={size} color={color} />,
         }}
       />
       <Tabs.Screen

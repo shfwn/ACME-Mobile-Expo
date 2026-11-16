@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -6,16 +6,27 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   StyleSheet,
+  Linking,
+  Alert,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
+import { useFocusEffect } from 'expo-router';
 import { teamRepository } from '../../db/team.repository';
 import { NotificationItem } from '../../types/team.types';
 import { BrandColors } from '../../constants/theme';
-import { Bell, CheckCheck, Inbox, ArrowUpRight } from 'lucide-react-native';
+import { Bell, CheckCheck, Inbox } from 'lucide-react-native';
+
+/** Filter daftar notifikasi berdasarkan tab aktif. */
+export function filterNotifications<T extends { isRead: boolean }>(
+  items: T[],
+  tab: 'all' | 'unread'
+): T[] {
+  return tab === 'unread' ? items.filter((n) => !n.isRead) : items;
+}
 
 export default function TeamNotificationsScreen() {
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
   const [notifications, setNotifications] = useState<NotificationItem[]>([]);
   const [filterTab, setFilterTab] = useState<'all' | 'unread'>('all');
@@ -24,23 +35,7 @@ export default function TeamNotificationsScreen() {
   const loadNotifications = useCallback(async () => {
     setIsLoading(true);
     try {
-      let data = await teamRepository.getNotifications(userId);
-
-      // Seed initial sample notifications jika belum ada
-      if (data.length === 0) {
-        await teamRepository.createNotification({
-          userId,
-          title: 'Tugas Baru Didelegasikan',
-          message: 'Owner menugaskan Anda pada tugas "Implementasi Modul Mobile ACME"',
-        });
-        await teamRepository.createNotification({
-          userId,
-          title: 'Review Progres Mingguan',
-          message: 'Jadwal evaluasi sprint mingguan telah ditambahkan ke kalender tim.',
-        });
-        data = await teamRepository.getNotifications(userId);
-      }
-
+      const data = await teamRepository.getNotifications(userId);
       setNotifications(data);
     } catch (e) {
       console.warn('Gagal memuat notifikasi:', e);
@@ -49,26 +44,36 @@ export default function TeamNotificationsScreen() {
     }
   }, [userId]);
 
-  useEffect(() => {
-    loadNotifications();
-  }, [loadNotifications]);
+  useFocusEffect(
+    useCallback(() => {
+      loadNotifications();
+    }, [loadNotifications])
+  );
 
   const unreadCount = useMemo(() => {
     return notifications.filter((n) => !n.isRead).length;
   }, [notifications]);
 
-  const filteredList = useMemo(() => {
-    if (filterTab === 'unread') {
-      return notifications.filter((n) => !n.isRead);
-    }
-    return notifications;
-  }, [notifications, filterTab]);
+  const filteredList = useMemo(
+    () => filterNotifications(notifications, filterTab),
+    [notifications, filterTab]
+  );
 
   const handleMarkAsRead = async (id: string) => {
+    // Tandai terbaca, lalu buka tautan bila notifikasi membawa linkUrl.
     await teamRepository.markNotificationAsRead(id);
     setNotifications((prev) =>
       prev.map((n) => (n.id === id ? { ...n, isRead: true } : n))
     );
+
+    const tapped = notifications.find((n) => n.id === id);
+    if (tapped?.linkUrl) {
+      try {
+        await Linking.openURL(tapped.linkUrl);
+      } catch {
+        Alert.alert('Gagal', 'Tautan notifikasi tidak dapat dibuka.');
+      }
+    }
   };
 
   const handleMarkAllRead = async () => {
@@ -111,13 +116,12 @@ export default function TeamNotificationsScreen() {
             Semua ({notifications.length})
           </Text>
         </TouchableOpacity>
-
         <TouchableOpacity
           style={[styles.tabChip, filterTab === 'unread' && styles.tabChipActive]}
           onPress={() => setFilterTab('unread')}
         >
           <Text style={[styles.tabChipText, filterTab === 'unread' && styles.tabChipTextActive]}>
-            Belum Dibaca ({unreadCount})
+            Belum Dibaca ({filteredList.length})
           </Text>
         </TouchableOpacity>
       </View>

@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import React, { useState, useCallback, useMemo } from 'react';
 import {
   View,
   Text,
@@ -9,13 +9,16 @@ import {
   Modal,
   TextInput,
   ScrollView,
+  Alert,
 } from 'react-native';
 import { useAuthStore } from '../../store/auth.store';
+import { useFocusEffect } from 'expo-router';
 import { teamRepository } from '../../db/team.repository';
 import { TaskItem, CustomStatus, Project } from '../../types/team.types';
 import { Priority } from '../../types/auth.types';
 import { BrandColors } from '../../constants/theme';
 import { TaskDetailModal } from '../../components/task-detail-modal';
+import { toIsoDate } from '../../components/date-picker-sheet';
 import {
   LayoutDashboard,
   Plus,
@@ -31,7 +34,7 @@ import {
 
 export default function TeamProjectsScreen() {
   const user = useAuthStore((s) => s.user);
-  const userId = user?.id || 'u-default';
+  const userId = user?.id ?? '';
 
   const [project, setProject] = useState<Project | null>(null);
   const [statuses, setStatuses] = useState<CustomStatus[]>([]);
@@ -69,9 +72,11 @@ export default function TeamProjectsScreen() {
     }
   }, [activeStatusId]);
 
-  useEffect(() => {
-    loadProjectData();
-  }, [loadProjectData]);
+  useFocusEffect(
+    useCallback(() => {
+      loadProjectData();
+    }, [loadProjectData])
+  );
 
   // Tasks in currently selected status column
   const currentColumnTasks = useMemo(() => {
@@ -95,11 +100,30 @@ export default function TeamProjectsScreen() {
     }
   };
 
+  const handleDeleteTask = (task: TaskItem) => {
+    Alert.alert('Hapus Tugas', `Hapus "${task.title}" beserta subtask-nya?`, [
+      { text: 'Batal', style: 'cancel' },
+      {
+        text: 'Hapus',
+        style: 'destructive',
+        onPress: async () => {
+          try {
+            await teamRepository.deleteTask(task.id);
+            setActiveTaskDetail(null);
+            await loadProjectData();
+          } catch (e) {
+            Alert.alert('Gagal', e instanceof Error ? e.message : 'Tugas tidak dapat dihapus');
+          }
+        },
+      },
+    ]);
+  };
+
   const handleCreateTask = async () => {
     if (!newTitle.trim() || !project) return;
     setIsSubmitting(true);
     try {
-      const todayIso = new Date().toISOString().split('T')[0];
+      const todayIso = toIsoDate(new Date());
       await teamRepository.createTask({
         projectId: project.id,
         statusId: activeStatusId || statuses[0].id,
@@ -273,6 +297,13 @@ export default function TeamProjectsScreen() {
 
                 {/* Quick Transition Bar */}
                 <View style={styles.cardActionBar}>
+                  <TouchableOpacity
+                    style={styles.actionShiftBtn}
+                    onPress={() => handleDeleteTask(item)}
+                  >
+                    <X size={13} color="#DC2626" />
+                    <Text style={[styles.actionShiftText, { color: '#DC2626' }]}>Hapus</Text>
+                  </TouchableOpacity>
                   {canPrev ? (
                     <TouchableOpacity
                       style={styles.actionShiftBtn}
