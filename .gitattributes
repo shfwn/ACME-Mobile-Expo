@@ -1,0 +1,24 @@
+# Normalisasi line ending: simpan LF di repo, biarkan git menangani
+# konversi di platform mana pun. Tanpa ini, Windows (core.autocrlf=true)
+# membuat diff seluruh berkas hanya karena CRLF.
+* text=auto eol=lf
+
+# Biner: jangan pernah dinormalisasi.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.ttf binary
+*.otf binary
+*.woff binary
+*.woff2 binary
+*.mp3 binary
+*.m4a binary
+*.wav binary
+*.zip binary
+*.apk binary
+*.aab binary
+*.keystore binary
+*.jks binary
